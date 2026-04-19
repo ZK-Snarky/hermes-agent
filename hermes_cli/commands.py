@@ -179,6 +179,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                subcommands=("connect", "disconnect", "status")),
     CommandDef("plugins", "List installed plugins and their status",
                "Tools & Skills", cli_only=True),
+    CommandDef("cc", "Launch Claude Code for coding tasks", "Tools & Skills",
+               aliases=("claude",), args_hint="[task description]"),
 
     # Info
     CommandDef("commands", "Browse all commands and skills (paginated)", "Info",

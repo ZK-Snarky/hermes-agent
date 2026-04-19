@@ -5919,6 +5919,9 @@ class GatewayRunner:
         if canonical == "footer":
             return await self._handle_footer_command(event)
 
+        if canonical == "cc" or canonical == "claude":
+            return await self._handle_cc_command(event)
+
         if canonical == "yolo":
             return await self._handle_yolo_command(event)
 
@@ -9936,6 +9939,47 @@ class GatewayRunner:
         if _save_config_key("agent.service_tier", saved_value):
             return f"⚡ ✓ Priority Processing: **{label}** (saved to config)\n_(takes effect on next message)_"
         return f"⚡ ✓ Priority Processing: **{label}** (this session only)"
+
+    async def _handle_cc_command(self, event: MessageEvent) -> str:
+        """Handle /cc — launch Claude Code for coding tasks via the orchestrator skill."""
+        import os
+        import re
+
+        text = (event.text or "").strip()
+        parts = text.split(maxsplit=1)
+        task_desc = parts[1].strip() if len(parts) > 1 else ""
+
+        if not task_desc:
+            return "What do we need to do with Claude Code?"
+
+        slug = re.sub(r"[^a-z0-9]+", "-", task_desc.lower())[:30].strip("-") or "task"
+        session_name = f"cc-{slug}"
+
+        instruction = (
+            f"[CC MODE] Coding task detected. Description: {task_desc}. "
+            f"Follow the coding-task-orchestrator skill: "
+            f"detect task type, ask clarifying questions one at a time, "
+            f"write spec to /Users/clawdolf/.hermes/tmp/cc-spec-{slug}.md, "
+            f"then launch Claude Code via `ccl {session_name} [working-dir]`. "
+            f"Always give the user: session name, "
+            f"attach command (`tmux attach -t {session_name}`), "
+            f"kill command (`cck {session_name}`)."
+        )
+
+        try:
+            session_entry = self.session_store.get_or_create_session(event.source)
+            history = self.session_store.load_transcript(session_entry.session_id)
+            history.append({"role": "user", "content": instruction})
+            history.append({
+                "role": "assistant",
+                "content": "Got it — coding task. Let me ask a few questions first...",
+            })
+            self.session_store.rewrite_transcript(session_entry.session_id, history)
+        except Exception:
+            pass
+
+        os.environ["HERMES_CC_MODE"] = "1"
+        return f"**CC Mode** — {task_desc}"
 
     async def _handle_yolo_command(self, event: MessageEvent) -> Union[str, EphemeralReply]:
         """Handle /yolo — toggle dangerous command approval bypass for this session only."""

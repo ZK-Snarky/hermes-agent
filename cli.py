@@ -6982,6 +6982,8 @@ class HermesCLI:
             self._toggle_verbose()
         elif canonical == "footer":
             self._handle_footer_command(cmd_original)
+        elif canonical == "cc" or canonical == "claude":
+            self._handle_cc_command(cmd_original)
         elif canonical == "yolo":
             self._toggle_yolo()
         elif canonical == "reasoning":
@@ -7892,6 +7894,43 @@ class HermesCLI:
             "verbose": f"{_Colors.BOLD}{_Colors.GREEN}Tool progress: VERBOSE{_Colors.RESET} — full args, results, think blocks, and debug logs.",
         }
         _cprint(labels.get(self.tool_progress_mode, ""))
+
+    def _handle_cc_command(self, cmd: str = ""):
+        """Handle /cc — launch Claude Code for coding tasks via the orchestrator skill."""
+        import re
+
+        parts = cmd.strip().split(maxsplit=1)
+        task_desc = parts[1].strip() if len(parts) > 1 else ""
+
+        if not task_desc:
+            self.console.print("  What do we need to do with Claude Code?")
+            return
+
+        slug = re.sub(r"[^a-z0-9]+", "-", task_desc.lower())[:30].strip("-") or "task"
+        session_name = f"cc-{slug}"
+
+        instruction = (
+            f"[CC MODE] Coding task detected. Description: {task_desc}. "
+            f"Follow the coding-task-orchestrator skill: "
+            f"detect task type, ask clarifying questions one at a time, "
+            f"write spec to /Users/clawdolf/.hermes/tmp/cc-spec-{slug}.md, "
+            f"then launch Claude Code via `ccl {session_name} [working-dir]`. "
+            f"Always give the user: session name, "
+            f"attach command (`tmux attach -t {session_name}`), "
+            f"kill command (`cck {session_name}`)."
+        )
+
+        try:
+            self.conversation_history.append({"role": "user", "content": instruction})
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": "Got it — coding task. Let me ask a few questions first...",
+            })
+        except Exception:
+            pass
+
+        os.environ["HERMES_CC_MODE"] = "1"
+        self.console.print(f"  [bold]CC Mode[/bold] — [dim]{task_desc}[/dim]")
 
     def _toggle_yolo(self):
         """Toggle YOLO mode — skip all dangerous command approval prompts."""
