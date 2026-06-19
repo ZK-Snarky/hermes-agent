@@ -7124,6 +7124,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
         # across sessions).
         persist_global = resolve_persist_behavior(is_global_flag, is_session)
 
+        # Seb shortcut: `/model gab` always means Gab AI's Arya model for this
+        # session only.  Do not persist it as the default model.
+        if (model_input or "").strip().lower() == "gab" and not explicit_provider:
+            model_input = "arya"
+            explicit_provider = "custom:gab"
+            persist_global = False
+
         # --refresh: wipe the on-disk picker cache before building the
         # provider list. Forces a live re-fetch of every authed provider's
         # /v1/models endpoint on this open.
@@ -7660,6 +7667,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
             self._handle_sessions_command(cmd_original)
         elif canonical == "model":
             self._handle_model_switch(cmd_original)
+        elif canonical == "gab":
+            self._handle_model_switch("/model arya --provider custom:gab --session")
         elif canonical == "codex-runtime":
             self._handle_codex_runtime(cmd_original)
         elif canonical == "gquota":

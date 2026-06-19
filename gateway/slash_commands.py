@@ -1062,6 +1062,13 @@ class GatewaySlashCommandsMixin:
         ) = parse_model_flags(raw_args)
         persist_global = resolve_persist_behavior(is_global_flag, is_session)
 
+        # Seb shortcut: `/model gab` always means Gab AI's Arya model for this
+        # session only.  Do not persist it as the default model.
+        if (model_input or "").strip().lower() == "gab" and not explicit_provider:
+            model_input = "arya"
+            explicit_provider = "custom:gab"
+            persist_global = False
+
         # --refresh: bust the disk cache so the picker shows live data.
         if force_refresh:
             try:
