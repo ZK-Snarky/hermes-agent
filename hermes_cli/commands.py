@@ -536,6 +536,7 @@ _TELEGRAM_MENU_PRIORITY = (
     "resume",
     "sessions",
     "model",
+    "gab",
     # Maintenance / diagnostics — the ones that prompted this priority list.
     "debug",
     "restart",

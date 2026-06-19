@@ -259,6 +259,11 @@ class TestTelegramBotCommands:
         assert "codex_runtime" in names
         assert "codex-runtime" not in names
 
+    def test_gab_shortcut_survives_telegram_visible_menu_cap(self):
+        """Seb's /gab shortcut should be visible in Telegram's capped menu."""
+        names = [name for name, _ in telegram_menu_commands(30)[0]]
+        assert "gab" in names
+
 
 class TestSlackSubcommandMap:
     def test_returns_dict(self):
