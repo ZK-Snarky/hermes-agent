@@ -73,6 +73,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_SIDECAR_PORT = 8789
 _DEFAULT_SIDECAR_BIND = "127.0.0.1"
+_PHOTON_SPECTRUM_API_BASE = "https://spectrum.photon.codes"
 
 # Photon iMessage messages from the SDK side have no documented hard
 # limit, but the underlying iMessage protocol limits practical message
@@ -476,6 +477,72 @@ class PhotonAdapter(BasePlatformAdapter):
             return stripped[len("hermes:"):].strip() or " "
         return None
 
+    async def _assert_cloud_project_safe(self) -> bool:
+        """Refuse Photon shared-cloud iMessage unless explicitly overridden.
+
+        Shared-pool Photon iMessage can emit server-side fallback/offline texts
+        when the gRPC stream drops. Hermes cannot suppress texts it did not
+        send, so shared cloud must fail closed for Seb-facing gateway use.
+        """
+        allow_shared = str(
+            os.getenv("PHOTON_ALLOW_SHARED_UNSAFE", "false")
+        ).strip().lower() in {"true", "1", "yes", "on"}
+        url = (
+            f"{_PHOTON_SPECTRUM_API_BASE}/projects/"
+            f"{self._project_id}/imessage/"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self._project_secret}",
+                        "Accept": "application/json",
+                    },
+                )
+        except Exception as exc:
+            self._set_fatal_error(
+                "IMESSAGE_TYPE_CHECK_FAILED",
+                f"could not verify Photon iMessage project type: {exc}",
+                retryable=True,
+            )
+            return False
+        if resp.status_code != 200:
+            self._set_fatal_error(
+                "IMESSAGE_TYPE_CHECK_FAILED",
+                f"Photon iMessage type check returned HTTP {resp.status_code}",
+                retryable=True,
+            )
+            return False
+        try:
+            data = resp.json() or {}
+        except Exception as exc:
+            self._set_fatal_error(
+                "IMESSAGE_TYPE_CHECK_FAILED",
+                f"Photon iMessage type check returned invalid JSON: {exc}",
+                retryable=True,
+            )
+            return False
+        imessage_type = str(((data.get("data") or {}).get("type") or "")).lower()
+        if imessage_type == "dedicated":
+            return True
+        if imessage_type == "shared" and allow_shared:
+            logger.warning(
+                "[photon] PHOTON_ALLOW_SHARED_UNSAFE=true — shared-cloud "
+                "iMessage can emit server-side fallback/offline texts"
+            )
+            return True
+        self._set_fatal_error(
+            "SHARED_CLOUD_UNSAFE",
+            "Photon iMessage project is shared-cloud. Shared-pool projects "
+            "can emit server-side fallback/offline texts that Hermes cannot "
+            "suppress. Use BlueBubbles/local routing or upgrade Photon to a "
+            "dedicated line. Set PHOTON_ALLOW_SHARED_UNSAFE=true only for "
+            "isolated diagnostics.",
+            retryable=False,
+        )
+        return False
+
     # -- Connection lifecycle ---------------------------------------------
 
     async def connect(self) -> bool:
@@ -491,6 +558,8 @@ class PhotonAdapter(BasePlatformAdapter):
                 "Run: hermes photon setup",
                 retryable=False,
             )
+            return False
+        if not await self._assert_cloud_project_safe():
             return False
 
         client = httpx.AsyncClient(timeout=30.0)
