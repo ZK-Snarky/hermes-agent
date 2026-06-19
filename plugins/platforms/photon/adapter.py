@@ -35,6 +35,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -84,6 +85,8 @@ _DEDUP_MAX_SIZE = 4000
 _DEDUP_WINDOW_SECONDS = 48 * 3600
 
 _SIDECAR_DIR = Path(__file__).parent / "sidecar"
+_SEBOS_BIN_DIR = Path.home() / ".hermes" / "sebos" / "bin"
+_SEBOS_AUDIO_INBOX = Path.home() / ".hermes" / "sebos" / "inbox" / "audio"
 
 # Group-chat mention wake words. When ``require_mention`` is enabled, group
 # messages are ignored unless they match one of these patterns — same
@@ -212,6 +215,9 @@ class PhotonAdapter(BasePlatformAdapter):
             os.getenv("PHOTON_SIDECAR_AUTOSTART", "true")
         ).lower() not in ("0", "false", "no")
         self._node_bin = os.getenv("PHOTON_NODE_BIN") or shutil.which("node") or "node"
+        self._sebos_rules_enabled = str(
+            extra.get("sebos_rules") or os.getenv("PHOTON_SEBOS_RULES", "false")
+        ).strip().lower() in {"true", "1", "yes", "on"}
 
         # With markdown on, format_message preserves fences and the sidecar's
         # markdown() builder renders them (or degrades them readably).
@@ -309,6 +315,166 @@ class PhotonAdapter(BasePlatformAdapter):
                 cleaned = text.lstrip()[match.end():].lstrip(" ,:-")
                 return cleaned or text
         return text
+
+    async def _run_sebos_json(
+        self,
+        *args: str,
+        stdin: Optional[str] = None,
+        timeout: float = 20.0,
+    ) -> Dict[str, Any]:
+        exe = _SEBOS_BIN_DIR / args[0]
+        if not exe.exists():
+            return {"status": "error", "error": f"missing sebOS command: {exe}"}
+        proc = await asyncio.create_subprocess_exec(
+            str(exe),
+            *args[1:],
+            stdin=asyncio.subprocess.PIPE if stdin is not None else None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(_SEBOS_BIN_DIR.parent),
+        )
+        try:
+            out, err = await asyncio.wait_for(
+                proc.communicate(stdin.encode() if stdin is not None else None),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"status": "error", "error": f"sebOS command timed out: {args[0]}"}
+        raw = out.decode("utf-8", "replace").strip()
+        stderr = err.decode("utf-8", "replace").strip()
+        try:
+            parsed = json.loads(raw) if raw else {}
+            data: Dict[str, Any] = parsed if isinstance(parsed, dict) else {"raw": parsed}
+        except json.JSONDecodeError:
+            data = {"status": "ok" if proc.returncode == 0 else "error", "raw": raw}
+        if stderr:
+            data["stderr"] = stderr
+        data["returncode"] = proc.returncode
+        return data
+
+    async def _send_quiet(self, chat_id: str, text: str) -> None:
+        result = await self.send(chat_id, text)
+        if not result.success:
+            logger.warning("[photon] sebOS rule reply failed: %s", result.error)
+
+    async def _mission_control_text(self) -> str:
+        data = await self._run_sebos_json(
+            "sebos-render-mission-control",
+            "--dry-run",
+            "--json",
+            timeout=25.0,
+        )
+        body = data.get("body") or data.get("raw") or "Mission Control unavailable."
+        return str(body).strip()
+
+    @staticmethod
+    def _section_from_board(body: str, label: str, max_items: int) -> str:
+        lines = body.splitlines()
+        items: List[str] = []
+        in_section = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped == label:
+                in_section = True
+                continue
+            if in_section:
+                if not stripped:
+                    break
+                if stripped.startswith("- "):
+                    items.append(stripped[2:].strip())
+                elif stripped.isupper() and len(stripped) < 40:
+                    break
+                else:
+                    items.append(stripped)
+        if not items:
+            return f"{label}: empty"
+        return f"{label}:\n" + "\n".join(f"- {item}" for item in items[:max_items])
+
+    async def _copy_audio_to_sebos_inbox(
+        self,
+        path: str,
+        message_id: Optional[str],
+    ) -> Optional[str]:
+        src = Path(path)
+        if not src.exists():
+            return None
+        _SEBOS_AUDIO_INBOX.mkdir(parents=True, exist_ok=True)
+        suffix = src.suffix or ".m4a"
+        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", message_id or str(uuid.uuid4()))[:120]
+        dest = _SEBOS_AUDIO_INBOX / f"{safe_id}{suffix}"
+        if dest.exists():
+            return str(dest)
+        try:
+            shutil.copy2(src, dest)
+            return str(dest)
+        except Exception as exc:
+            logger.warning("[photon] failed to copy audio into sebOS inbox: %s", exc)
+            return None
+
+    async def _handle_sebos_rules(
+        self,
+        *,
+        space_id: str,
+        message_id: Optional[str],
+        text: str,
+        mtype: MessageType,
+        media_urls: List[str],
+        media_types: List[str],
+    ) -> Optional[str]:
+        if not self._sebos_rules_enabled:
+            return None
+        stripped = (text or "").strip()
+        lowered = stripped.lower()
+        if lowered.startswith("j:") or lowered.startswith("journal:"):
+            await self._send_quiet(space_id, "Saved.")
+            payload = json.dumps(
+                {"space_id": space_id, "message_id": message_id, "text": stripped},
+                sort_keys=True,
+            )
+            result = await self._run_sebos_json("sebos-photon-ingest-text", stdin=payload)
+            logger.info("[photon] sebOS journal ingest: %s", result)
+            return "handled"
+        if lowered == "board":
+            await self._send_quiet(space_id, (await self._mission_control_text())[:_MAX_MESSAGE_LENGTH])
+            return "handled"
+        if lowered == "now" or lowered == "next":
+            board = await self._mission_control_text()
+            await self._send_quiet(
+                space_id,
+                self._section_from_board(board, lowered.upper(), 1 if lowered == "now" else 3),
+            )
+            return "handled"
+        audio_paths = [
+            path for path, mime in zip(media_urls, media_types)
+            if mtype in {MessageType.AUDIO, MessageType.VOICE} or (mime or "").lower().startswith("audio/")
+        ]
+        if audio_paths:
+            saved_any = False
+            for idx, path in enumerate(audio_paths):
+                inbox_path = await self._copy_audio_to_sebos_inbox(path, message_id)
+                if not inbox_path:
+                    continue
+                result = await self._run_sebos_json(
+                    "sebos-photon-ingest-audio",
+                    "--space-id", space_id,
+                    "--message-id", message_id or "unknown",
+                    "--audio-path", inbox_path,
+                    "--mime-type", (media_types[idx] if idx < len(media_types) else "audio/mp4") or "audio/mp4",
+                    "--name", Path(inbox_path).name,
+                    timeout=45.0,
+                )
+                logger.info("[photon] sebOS audio ingest: %s", result)
+                saved_any = True
+            if saved_any:
+                await self._send_quiet(space_id, "Audio saved.")
+                return "handled"
+        if lowered.startswith("h:"):
+            return stripped[2:].strip() or " "
+        if lowered.startswith("hermes:"):
+            return stripped[len("hermes:"):].strip() or " "
+        return None
 
     # -- Connection lifecycle ---------------------------------------------
 
@@ -633,6 +799,19 @@ class PhotonAdapter(BasePlatformAdapter):
                 )
                 return
             text = self._clean_mention_text(text)
+
+        rule_result = await self._handle_sebos_rules(
+            space_id=space_id,
+            message_id=event.get("messageId"),
+            text=text,
+            mtype=mtype,
+            media_urls=media_urls,
+            media_types=media_types,
+        )
+        if rule_result == "handled":
+            return
+        if isinstance(rule_result, str):
+            text = rule_result
 
         source = self.build_source(
             chat_id=space_id,
