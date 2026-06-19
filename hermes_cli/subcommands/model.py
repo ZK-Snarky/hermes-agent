@@ -20,6 +20,22 @@ def build_model_parser(subparsers, *, cmd_model: Callable) -> None:
         description="Interactively select your inference provider and default model",
     )
     model_parser.add_argument(
+        "shortcut",
+        nargs="?",
+        help="Shortcut model name. `gab` starts Gab AI Arya for this CLI session without changing defaults.",
+    )
+    model_parser.add_argument(
+        "-q",
+        "--query",
+        help="Single query for shortcut models like `hermes model gab -q ...`.",
+    )
+    model_parser.add_argument(
+        "-Q",
+        "--quiet",
+        action="store_true",
+        help="Quiet mode for shortcut model queries.",
+    )
+    model_parser.add_argument(
         "--refresh",
         action="store_true",
         help="Wipe the model picker disk cache and re-fetch every provider's live /v1/models list.",

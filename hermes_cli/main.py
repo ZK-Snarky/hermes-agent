@@ -2641,6 +2641,13 @@ def cmd_postinstall(args):
 
 def cmd_model(args):
     """Select default model — starts with provider selection, then model picker."""
+    shortcut = str(getattr(args, "shortcut", "") or "").strip().lower()
+    if shortcut == "gab":
+        return cmd_gab(args)
+    if shortcut:
+        print(f"Unknown model shortcut: {shortcut}")
+        print("Use `hermes model` for the picker or `hermes gab` for Gab AI Arya.")
+        sys.exit(2)
     _require_tty("model")
     if getattr(args, "refresh", False):
         try:
@@ -2650,6 +2657,30 @@ def cmd_model(args):
         except Exception:
             pass
     select_provider_and_model(args=args)
+
+
+def cmd_gab(args):
+    """Start a CLI chat on Gab AI Arya without changing the default model."""
+    setattr(args, "model", "arya")
+    setattr(args, "provider", "custom:gab")
+    for attr, default in [
+        ("query", None),
+        ("toolsets", None),
+        ("skills", None),
+        ("verbose", None),
+        ("quiet", False),
+        ("resume", None),
+        ("continue_last", None),
+        ("worktree", False),
+        ("checkpoints", False),
+        ("max_turns", None),
+        ("yolo", False),
+        ("pass_session_id", False),
+        ("ignore_rules", False),
+    ]:
+        if not hasattr(args, attr):
+            setattr(args, attr, default)
+    return cmd_chat(args)
 
 
 def _is_profile_api_key_provider(provider_id: str) -> bool:
@@ -11635,6 +11666,41 @@ def main():
 
     parser, subparsers, chat_parser = build_top_level_parser()
     chat_parser.set_defaults(func=cmd_chat)
+
+    # =========================================================================
+    # gab command — CLI-first shortcut to Gab AI Arya, session-only
+    # =========================================================================
+    gab_parser = subparsers.add_parser(
+        "gab",
+        help="Start chat with Gab AI Arya (session only)",
+        description="Start a Hermes CLI session using Gab AI Arya without changing the default model.",
+    )
+    gab_parser.add_argument(
+        "-q", "--query", help="Single query using Gab AI Arya (non-interactive mode)"
+    )
+    gab_parser.add_argument(
+        "-t", "--toolsets", help="Comma-separated toolsets to enable"
+    )
+    gab_parser.add_argument(
+        "-Q",
+        "--quiet",
+        action="store_true",
+        help="Quiet mode for programmatic use: suppress banner, spinner, and tool previews.",
+    )
+    gab_parser.add_argument(
+        "--checkpoints",
+        action="store_true",
+        default=False,
+        help="Enable filesystem checkpoints before destructive file operations",
+    )
+    gab_parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Maximum tool-calling iterations per conversation turn",
+    )
+    gab_parser.set_defaults(func=cmd_gab)
 
     # =========================================================================
     # model command  (parser built in hermes_cli/subcommands/model.py)
