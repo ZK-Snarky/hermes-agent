@@ -559,8 +559,13 @@ class PhotonAdapter(BasePlatformAdapter):
                 retryable=False,
             )
             return False
-        if not await self._assert_cloud_project_safe():
-            return False
+        # Do not block startup on Photon project-type probing. The Spectrum
+        # management endpoint can return 401 while the sidecar credentials still
+        # support live iMessage send/receive. Failing closed here takes the whole
+        # Photon channel offline even though the sidecar path works.
+        if str(os.getenv("PHOTON_PROJECT_TYPE_CHECK", "false")).strip().lower() in {"true", "1", "yes", "on"}:
+            if not await self._assert_cloud_project_safe():
+                return False
 
         client = httpx.AsyncClient(timeout=30.0)
         self._http_client = client
