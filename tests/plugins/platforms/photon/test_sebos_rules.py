@@ -57,8 +57,8 @@ async def test_sebos_rules_explicit_command_routes_to_sebos(monkeypatch: pytest.
 
     sent = []
 
-    async def fake_send(space_id: str, text: str) -> None:
-        sent.append((space_id, text))
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
 
     monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
     monkeypatch.setattr(adapter, "_send_quiet", fake_send)
@@ -75,7 +75,7 @@ async def test_sebos_rules_explicit_command_routes_to_sebos(monkeypatch: pytest.
     assert result == "handled"
     assert calls[0][0][:6] == ("sebos-route-command", "--text", "-", "--write", "--db", str(adapter_module._SEBOS_DB_PATH))
     assert calls[0][1] == "reminder: tomorrow at 9 call Chaz"
-    assert sent == [("space-1", "Reminder set.")]
+    assert sent == [("space-1", "Reminder set.", "msg-1")]
 
 
 @pytest.mark.asyncio
@@ -108,8 +108,8 @@ async def test_sebos_rules_journal_routes_and_replies_once(monkeypatch: pytest.M
 
     sent = []
 
-    async def fake_send(space_id: str, text: str) -> None:
-        sent.append((space_id, text))
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
 
     monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
     monkeypatch.setattr(adapter, "_send_quiet", fake_send)
@@ -124,7 +124,7 @@ async def test_sebos_rules_journal_routes_and_replies_once(monkeypatch: pytest.M
     )
 
     assert result == "handled"
-    assert sent == [("space-1", "Journal saved.")]
+    assert sent == [("space-1", "Journal saved.", "msg-1")]
 
 
 @pytest.mark.asyncio

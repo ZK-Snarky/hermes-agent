@@ -228,6 +228,27 @@ class PhotonAdapter(BasePlatformAdapter):
         self._sebos_rules_enabled = str(
             extra.get("sebos_rules") or os.getenv("PHOTON_SEBOS_RULES", "false")
         ).strip().lower() in {"true", "1", "yes", "on"}
+        intent_gate_cfg = extra.get("intent_gate")
+        if intent_gate_cfg is None:
+            intent_gate_cfg = os.getenv("PHOTON_INTENT_GATE", "false")
+        self._intent_gate_enabled = str(intent_gate_cfg).strip().lower() in {
+            "true", "1", "yes", "on"
+        }
+        self._intent_gate_provider = str(
+            extra.get("intent_gate_provider")
+            or os.getenv("PHOTON_INTENT_GATE_PROVIDER")
+            or "openai-codex"
+        ).strip()
+        self._intent_gate_model = str(
+            extra.get("intent_gate_model")
+            or os.getenv("PHOTON_INTENT_GATE_MODEL")
+            or "gpt-5.5"
+        ).strip()
+        self._intent_gate_min_confidence = float(
+            extra.get("intent_gate_min_confidence")
+            or os.getenv("PHOTON_INTENT_GATE_MIN_CONFIDENCE")
+            or 0.86
+        )
         self._typing_indicators_enabled = str(
             extra.get("typing_indicators")
             or os.getenv("PHOTON_TYPING_INDICATORS", "false")
@@ -378,10 +399,17 @@ class PhotonAdapter(BasePlatformAdapter):
         data["returncode"] = proc.returncode
         return data
 
-    async def _send_quiet(self, chat_id: str, text: str) -> None:
+    async def _send_quiet(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        reply_to: Optional[str] = None,
+    ) -> None:
         result = await self._send_with_retry(
             chat_id,
             text,
+            reply_to=reply_to,
             max_retries=3,
             base_delay=2.0,
         )
@@ -717,13 +745,18 @@ class PhotonAdapter(BasePlatformAdapter):
             return stripped[len("hermes:"):].strip() or " "
 
         if lowered == "board":
-            await self._send_quiet(space_id, (await self._mission_control_text())[:_MAX_MESSAGE_LENGTH])
+            await self._send_quiet(
+                space_id,
+                (await self._mission_control_text())[:_MAX_MESSAGE_LENGTH],
+                reply_to=message_id,
+            )
             return "handled"
         if lowered == "now" or lowered == "next":
             board = await self._mission_control_text()
             await self._send_quiet(
                 space_id,
                 self._section_from_board(board, lowered.upper(), 1 if lowered == "now" else 3),
+                reply_to=message_id,
             )
             return "handled"
 
@@ -750,9 +783,172 @@ class PhotonAdapter(BasePlatformAdapter):
                 return "handled"
             if not reply:
                 reply = "Handled." if status != "error" else "Could not handle that."
-            await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH])
+            await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH], reply_to=message_id)
             return "handled"
         return None
+
+    @staticmethod
+    def _json_object_from_text(text: str) -> Optional[Dict[str, Any]]:
+        raw = (text or "").strip()
+        if not raw:
+            return None
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE).strip()
+            raw = re.sub(r"\s*```$", "", raw).strip()
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start >= 0 and end > start:
+            raw = raw[start : end + 1]
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _should_run_intent_gate(self, text: str, mtype: MessageType) -> bool:
+        if not self._intent_gate_enabled or not self._sebos_rules_enabled:
+            return False
+        if mtype is not MessageType.TEXT:
+            return False
+        stripped = (text or "").strip()
+        lowered = stripped.lower()
+        if not stripped or len(stripped) > 240 or "\n" in stripped:
+            return False
+        if lowered.startswith(("/", "h:", "hermes:", "t:", "thread:", "t+")):
+            return False
+        if self._looks_like_sebos_command(stripped):
+            return False
+        return any(
+            cue in lowered
+            for cue in (
+                "remind", "reminder", "remember to", "don't let me forget",
+                "dont let me forget", "note", "write this down", "save this",
+                "journal", "log this", "board", "control center", "mission control",
+            )
+        )
+
+    async def _classify_natural_intent(
+        self,
+        text: str,
+        *,
+        timestamp: datetime,
+    ) -> Optional[Dict[str, Any]]:
+        prompt = (
+            "Classify one short iMessage from Seb for a tiny personal-OS router. "
+            "Return JSON only. Do not chat. Do not invent missing dates. "
+            "Use intent chat for questions, advice, planning, unclear notes, or anything messy. "
+            "Use intent reminder only when the message asks to be reminded and a concrete due time/date can be normalized. "
+            "Use intent note only when the message asks to save/write/note something. "
+            "Use intent journal only when the message explicitly asks to journal/log an entry. "
+            "Schema: {\"intent\":\"reminder|note|journal|board|now|chat\","
+            "\"confidence\":0.0,"
+            "\"needs_clarification\":false,"
+            "\"clarification\":\"\","
+            "\"title\":\"\","
+            "\"body\":\"\","
+            "\"target\":\"\","
+            "\"due_datetime\":\"YYYY-MM-DD HH:MM or empty\"}.\n"
+            f"Current local time: {datetime.now().astimezone().isoformat(timespec='minutes')}\n"
+            f"Message timestamp: {timestamp.astimezone().isoformat(timespec='minutes')}\n"
+            f"Message: {text!r}"
+        )
+
+        def _call() -> Optional[Dict[str, Any]]:
+            from agent.auxiliary_client import call_llm
+
+            resp = call_llm(
+                task="photon_intent",
+                provider=self._intent_gate_provider,
+                model=self._intent_gate_model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=350,
+                temperature=0,
+                timeout=20,
+            )
+            content = resp.choices[0].message.content
+            return self._json_object_from_text(str(content or ""))
+
+        try:
+            return await asyncio.to_thread(_call)
+        except Exception as exc:
+            logger.warning("[photon] intent gate failed; falling through to Hermes: %s", exc)
+            return None
+
+    @staticmethod
+    def _intent_to_sebos_text(intent: Dict[str, Any]) -> Optional[str]:
+        kind = str(intent.get("intent") or "").strip().lower()
+        title = str(intent.get("title") or "").strip()
+        body = str(intent.get("body") or "").strip()
+        target = str(intent.get("target") or "").strip()
+        due = str(intent.get("due_datetime") or "").strip()
+        if kind == "reminder":
+            if not title or not due:
+                return None
+            return f"remind me {due} to {title}"
+        if kind == "note":
+            content = body or title
+            if not content:
+                return None
+            if target:
+                return f"note this under {target}: {content}"
+            return f"note this: {content}"
+        if kind == "journal":
+            content = body or title
+            return f"j: {content}" if content else None
+        if kind == "board":
+            return "board"
+        if kind == "now":
+            return "now"
+        return None
+
+    async def _try_intent_gate(
+        self,
+        *,
+        space_id: str,
+        message_id: Optional[str],
+        text: str,
+        mtype: MessageType,
+        timestamp: datetime,
+    ) -> Optional[str]:
+        if not self._should_run_intent_gate(text, mtype):
+            return None
+        intent = await self._classify_natural_intent(text, timestamp=timestamp)
+        if not intent:
+            return None
+        kind = str(intent.get("intent") or "").strip().lower()
+        confidence = float(intent.get("confidence") or 0)
+        needs_clarification = bool(intent.get("needs_clarification"))
+        if needs_clarification and str(intent.get("clarification") or "").strip():
+            await self._send_quiet(
+                space_id,
+                str(intent.get("clarification")).strip()[:_MAX_MESSAGE_LENGTH],
+                reply_to=message_id,
+            )
+            return "handled"
+        if kind == "chat" or confidence < self._intent_gate_min_confidence:
+            return None
+        routed_text = self._intent_to_sebos_text(intent)
+        if not routed_text:
+            return None
+        result = await self._run_sebos_json(
+            "sebos-route-command",
+            "--text", "-",
+            "--write",
+            "--db", str(_SEBOS_DB_PATH),
+            "--json",
+            stdin=routed_text,
+            timeout=45.0,
+        )
+        logger.info("[photon] intent gate route result: %s", result)
+        reply = str(result.get("reply") or "").strip()
+        ack_emoji = self._sebos_ack_emoji(result)
+        if ack_emoji and await self._send_ack_reaction(space_id, message_id, ack_emoji):
+            return "handled"
+        if not reply:
+            status = str(result.get("status") or "")
+            reply = "Handled." if status != "error" else "Could not handle that."
+        await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH], reply_to=message_id)
+        return "handled"
 
     @staticmethod
     def _looks_like_sebos_command(text: str) -> bool:
@@ -1271,6 +1467,16 @@ class PhotonAdapter(BasePlatformAdapter):
             return
 
         if not thread_root:
+            gate_result = await self._try_intent_gate(
+                space_id=space_id,
+                message_id=event.get("messageId"),
+                text=text,
+                mtype=mtype,
+                timestamp=timestamp,
+            )
+            if gate_result == "handled":
+                return
+
             rule_result = await self._handle_sebos_rules(
                 space_id=space_id,
                 message_id=event.get("messageId"),
