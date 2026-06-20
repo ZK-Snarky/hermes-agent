@@ -19,7 +19,8 @@
 //   - POST /healthz     -> {"ok": true}
 //   - POST /send        -> {"ok": true, "messageId": "..."}
 //       body: {"spaceId": "...", "text": "...",
-//              "format": "text" | "markdown" (default "text")}
+//              "format": "text" | "markdown" (default "text"),
+//              "replyToMessageId": "..." | null}
 //   - POST /send-attachment -> {"ok": true, "messageId": "..."}
 //       body: {"spaceId": "...", "path": "...", "name": "..." | null,
 //              "mimeType": "..." | null, "caption": "..." | null,
@@ -159,6 +160,7 @@ let Spectrum,
   attachment,
   voice,
   spectrumReaction,
+  spectrumReply,
   spectrumTyping,
   spectrumText,
   spectrumMarkdown;
@@ -168,6 +170,7 @@ try {
     attachment,
     voice,
     reaction: spectrumReaction,
+    reply: spectrumReply,
     typing: spectrumTyping,
     text: spectrumText,
     markdown: spectrumMarkdown,
@@ -397,15 +400,47 @@ async function normalizeContent(content) {
       targetDirection: content.target?.direction ?? null,
     };
   }
+  if (content.type === "reply") {
+    return {
+      type: "reply",
+      targetMessageId: content.target?.id ?? null,
+      content: await normalizeContent(content.content),
+    };
+  }
   return { type: content.type || "unknown" };
+}
+
+function replyMetadataFromMessage(message, normalizedContent) {
+  const raw = message?.raw ?? message?.__raw ?? message?.providerMessage ?? null;
+  const replyToMessageId =
+    message?.replyToMessageId ??
+    message?.replyTo?.messageId ??
+    message?.replyTo?.id ??
+    raw?.replyToMessageId ??
+    raw?.reply_to_guid ??
+    (normalizedContent?.type === "reply" ? normalizedContent.targetMessageId : null) ??
+    null;
+  const threadRootMessageId =
+    message?.threadRootMessageId ??
+    message?.threadRoot?.messageId ??
+    message?.threadRoot?.id ??
+    raw?.threadRootMessageId ??
+    raw?.thread_originator_guid ??
+    replyToMessageId ??
+    null;
+  return { replyToMessageId, threadRootMessageId };
 }
 
 async function normalizeEvent(space, message) {
   try {
     const msgSpace = message.space || {};
     const ts = message.timestamp;
+    const normalizedContent = await normalizeContent(message.content);
+    const replyMeta = replyMetadataFromMessage(message, normalizedContent);
     return {
       messageId: message.id ?? null,
+      replyToMessageId: replyMeta.replyToMessageId,
+      threadRootMessageId: replyMeta.threadRootMessageId,
       platform: message.platform || space.__platform || "iMessage",
       space: {
         id: space.id ?? msgSpace.id ?? null,
@@ -414,7 +449,7 @@ async function normalizeEvent(space, message) {
         phone: space.phone ?? msgSpace.phone ?? null,
       },
       sender: { id: message.sender ? message.sender.id : null },
-      content: await normalizeContent(message.content),
+      content: normalizedContent,
       timestamp:
         ts instanceof Date ? ts.toISOString() : ts ? String(ts) : null,
     };
@@ -622,7 +657,7 @@ const server = http.createServer(async (req, res) => {
     }
     const body = await readBody(req);
     if (req.url === "/send") {
-      const { spaceId, text, format = "text" } = body || {};
+      const { spaceId, text, format = "text", replyToMessageId = null } = body || {};
       if (!spaceId || typeof text !== "string") {
         return badRequest(res, "spaceId and text are required");
       }
@@ -634,8 +669,29 @@ const server = http.createServer(async (req, res) => {
       // readable plain text on platforms that don't.
       const builder =
         format === "markdown" ? spectrumMarkdown(text) : spectrumText(text);
+      if (replyToMessageId) {
+        try {
+          const target =
+            knownMessages.get(replyToMessageId) ??
+            (await space.getMessage(replyToMessageId));
+          if (target && spectrumReply) {
+            const result = await space.send(spectrumReply(builder, target));
+            rememberKnownMessage(result);
+            return ok(res, { messageId: result?.id || null, threaded: true });
+          }
+          console.error(
+            `photon-sidecar: reply target ${replyToMessageId} not found; falling back to flat send`
+          );
+        } catch (e) {
+          console.error(
+            "photon-sidecar: threaded reply failed; falling back to flat send: " +
+              (e && e.message ? e.message : String(e))
+          );
+        }
+      }
       const result = await space.send(builder);
-      return ok(res, { messageId: result?.id || null });
+      rememberKnownMessage(result);
+      return ok(res, { messageId: result?.id || null, threaded: false });
     }
     if (req.url === "/send-attachment") {
       const { spaceId, path, name, mimeType, caption, kind } =

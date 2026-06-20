@@ -16,7 +16,7 @@ def _make_adapter(monkeypatch: pytest.MonkeyPatch, extra: dict | None = None) ->
 
 
 @pytest.mark.asyncio
-async def test_sebos_rules_unknown_falls_through_to_assistant(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sebos_rules_unknown_text_stays_on_command_rail(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _make_adapter(monkeypatch)
     calls = []
 
@@ -41,9 +41,14 @@ async def test_sebos_rules_unknown_falls_through_to_assistant(monkeypatch: pytes
         media_types=[],
     )
 
-    assert result is None
+    assert result == "handled"
     assert calls == []
-    assert sent == []
+    assert sent == [
+        (
+            "space-1",
+            "Use t: for chat. Use j:, remind me, note this, or board for Mission Control.",
+        )
+    ]
 
 
 @pytest.mark.asyncio

@@ -95,6 +95,9 @@ _SEBOS_BIN_DIR = _SEBOS_ROOT / "bin"
 _SEBOS_DB_PATH = _SEBOS_ROOT / "sebos.db"
 _SEBOS_AUDIO_INBOX = _SEBOS_ROOT / "inbox" / "audio"
 _DOCUMENT_CACHE_DIR = Path.home() / ".hermes" / "cache" / "documents"
+_THREAD_START_RE = re.compile(r"^\s*(?:t|thread)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
+_THREAD_CONTINUE_RE = re.compile(r"^\s*t\+\s*:?\s*(.*)$", re.IGNORECASE | re.DOTALL)
+_COMMAND_RAIL_HINT = "Use t: for chat. Use j:, remind me, note this, or board for Mission Control."
 
 # Group-chat mention wake words. When ``require_mention`` is enabled, group
 # messages are ignored unless they match one of these patterns — same
@@ -256,6 +259,13 @@ class PhotonAdapter(BasePlatformAdapter):
         # react action default to "the message that triggered me" without
         # requiring the model to thread message ids through tool calls.
         self._last_inbound_by_chat: Dict[str, str] = {}
+        # Photon/iMessage thread rails. ``t:`` creates a virtual Hermes thread
+        # keyed by the triggering inbound message id. Outbound replies are
+        # mapped back to that root so native replies to the bot resume the same
+        # Hermes session instead of polluting the main command lane.
+        self._sent_thread_roots: Dict[str, str] = {}
+        self._last_thread_root_by_chat: Dict[str, str] = {}
+        self._command_hint_sent_by_chat: Dict[str, float] = {}
 
         # Group-chat mention gating (iMessage parity). When enabled,
         # group messages are ignored unless they match a wake word; DMs are
@@ -685,16 +695,12 @@ class PhotonAdapter(BasePlatformAdapter):
         ):
             return None
 
-        # Explicit assistant escape hatch. Deterministic sebOS actions require
-        # explicit commands; normal iMessages stay normal Hermes chat.
+        # Legacy explicit assistant escape hatch. ``t:`` / ``thread:`` is the
+        # normal iMessage chat path; keep h:/hermes: for manual diagnostics.
         if lowered.startswith("h:"):
             return stripped[2:].strip() or " "
         if lowered.startswith("hermes:"):
             return stripped[len("hermes:"):].strip() or " "
-        if lowered.startswith("ask:"):
-            return stripped[4:].strip() or " "
-        if lowered.startswith("chat:"):
-            return stripped[5:].strip() or " "
 
         if lowered == "board":
             await self._send_quiet(space_id, (await self._mission_control_text())[:_MAX_MESSAGE_LENGTH])
@@ -731,6 +737,14 @@ class PhotonAdapter(BasePlatformAdapter):
             if not reply:
                 reply = "Handled." if status != "error" else "Could not handle that."
             await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH])
+            return "handled"
+        if mtype == MessageType.TEXT and stripped:
+            key = self._normalize_chat_key(space_id)
+            now = time.time()
+            last_hint = self._command_hint_sent_by_chat.get(key, 0.0)
+            if now - last_hint > 3600:
+                self._command_hint_sent_by_chat[key] = now
+                await self._send_quiet(space_id, _COMMAND_RAIL_HINT)
             return "handled"
         return None
 
@@ -1019,6 +1033,9 @@ class PhotonAdapter(BasePlatformAdapter):
             logger.warning("[photon] inbound missing space.id")
             return
 
+        reply_to_message_id = event.get("replyToMessageId")
+        thread_root_message_id = event.get("threadRootMessageId")
+
         # iMessage spaces carry their type directly — no id string-sniffing.
         chat_type = "group" if space.get("type") == "group" else "dm"
         sender_id = sender.get("id") or space.get("phone") or space_id
@@ -1093,6 +1110,10 @@ class PhotonAdapter(BasePlatformAdapter):
             )
 
         ctype = content.get("type")
+        if ctype == "reply":
+            reply_to_message_id = reply_to_message_id or content.get("targetMessageId")
+            content = content.get("content") or {}
+            ctype = content.get("type")
         if ctype == "reaction":
             # Route only tapbacks on messages WE sent — those are implicitly
             # addressed to the bot (feishu precedent: synthetic text event).
@@ -1216,6 +1237,24 @@ class PhotonAdapter(BasePlatformAdapter):
             )
             return
 
+        thread_root = self._thread_root_for_reply(
+            space_id,
+            str(reply_to_message_id) if reply_to_message_id else None,
+            str(thread_root_message_id) if thread_root_message_id else None,
+        )
+        thread_start = _THREAD_START_RE.match(text or "")
+        if thread_start and event.get("messageId"):
+            thread_root = str(event.get("messageId"))
+            self._last_thread_root_by_chat[self._normalize_chat_key(space_id)] = thread_root
+            text = thread_start.group(1).strip() or " "
+        else:
+            thread_continue = _THREAD_CONTINUE_RE.match(text or "")
+            if thread_continue:
+                thread_root = thread_root or self._last_thread_root_by_chat.get(
+                    self._normalize_chat_key(space_id)
+                )
+                text = thread_continue.group(1).strip() or " "
+
         if await self._try_ingest_audio_journal_reply(
             space_id=space_id,
             sender_id=sender_id,
@@ -1227,18 +1266,19 @@ class PhotonAdapter(BasePlatformAdapter):
         ):
             return
 
-        rule_result = await self._handle_sebos_rules(
-            space_id=space_id,
-            message_id=event.get("messageId"),
-            text=text,
-            mtype=mtype,
-            media_urls=media_urls,
-            media_types=media_types,
-        )
-        if rule_result == "handled":
-            return
-        if isinstance(rule_result, str):
-            text = rule_result
+        if not thread_root:
+            rule_result = await self._handle_sebos_rules(
+                space_id=space_id,
+                message_id=event.get("messageId"),
+                text=text,
+                mtype=mtype,
+                media_urls=media_urls,
+                media_types=media_types,
+            )
+            if rule_result == "handled":
+                return
+            if isinstance(rule_result, str):
+                text = rule_result
 
         source = self.build_source(
             chat_id=space_id,
@@ -1246,12 +1286,14 @@ class PhotonAdapter(BasePlatformAdapter):
             chat_type=chat_type,
             user_id=sender_id,
             user_name=sender_id or None,
+            thread_id=thread_root,
         )
         message_event = MessageEvent(
             text=text,
             message_type=mtype,
             source=source,
             message_id=event.get("messageId"),
+            reply_to_message_id=str(reply_to_message_id) if reply_to_message_id else None,
             raw_message=event,
             timestamp=timestamp,
             media_urls=media_urls,
@@ -1498,7 +1540,7 @@ class PhotonAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
-        return await self._sidecar_send(chat_id, self.format_message(content))
+        return await self._sidecar_send(chat_id, self.format_message(content), reply_to=reply_to)
 
     # -- Outbound media (iMessage parity) -----
     #
@@ -1638,6 +1680,33 @@ class PhotonAdapter(BasePlatformAdapter):
         if len(sent) > self._SENT_IDS_MAX:
             for old in list(sent.keys())[: len(sent) - self._SENT_IDS_MAX]:
                 del sent[old]
+
+    def _record_sent_thread_root(
+        self, message_id: Optional[str], reply_to: Optional[str]
+    ) -> None:
+        if not message_id or not reply_to:
+            return
+        root = self._sent_thread_roots.get(reply_to) or reply_to
+        roots = self._sent_thread_roots
+        if message_id in roots:
+            del roots[message_id]
+        roots[message_id] = root
+        if len(roots) > self._SENT_IDS_MAX:
+            for old in list(roots.keys())[: len(roots) - self._SENT_IDS_MAX]:
+                del roots[old]
+
+    def _thread_root_for_reply(
+        self,
+        chat_id: str,
+        reply_to_message_id: Optional[str],
+        thread_root_message_id: Optional[str],
+    ) -> Optional[str]:
+        root = thread_root_message_id or None
+        if reply_to_message_id:
+            root = root or self._sent_thread_roots.get(reply_to_message_id) or reply_to_message_id
+        if root:
+            self._last_thread_root_by_chat[self._normalize_chat_key(chat_id)] = root
+        return root
 
     # A DM space is addressable two ways — the chat GUID (`any;-;+1555...`)
     # that inbound events carry, and the bare E.164 phone that home-channel
@@ -1875,7 +1944,13 @@ class PhotonAdapter(BasePlatformAdapter):
             logger.error("[photon] Plain-text retry also failed: %s", fallback_result.error)
         return fallback_result
 
-    async def _sidecar_send(self, space_id: str, text: str) -> SendResult:
+    async def _sidecar_send(
+        self,
+        space_id: str,
+        text: str,
+        *,
+        reply_to: Optional[str] = None,
+    ) -> SendResult:
         if len(text) > self.MAX_MESSAGE_LENGTH:
             logger.warning(
                 "[photon] truncating outbound from %d to %d chars",
@@ -1883,6 +1958,8 @@ class PhotonAdapter(BasePlatformAdapter):
             )
             text = text[: self.MAX_MESSAGE_LENGTH]
         body: Dict[str, Any] = {"spaceId": space_id, "text": text}
+        if reply_to:
+            body["replyToMessageId"] = reply_to
         # Omit the key when disabled so an older sidecar (pre-`format`)
         # keeps accepting the body during a half-upgraded restart.
         if _markdown_enabled():
@@ -1892,6 +1969,7 @@ class PhotonAdapter(BasePlatformAdapter):
         except Exception as e:
             return SendResult(success=False, error=str(e))
         self._record_sent_message(data.get("messageId"))
+        self._record_sent_thread_root(data.get("messageId"), reply_to)
         return SendResult(success=True, message_id=data.get("messageId"))
 
     async def _sidecar_send_attachment(
