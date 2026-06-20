@@ -158,6 +158,7 @@ let Spectrum,
   imessage,
   attachment,
   voice,
+  spectrumReaction,
   spectrumTyping,
   spectrumText,
   spectrumMarkdown;
@@ -166,6 +167,7 @@ try {
     Spectrum,
     attachment,
     voice,
+    reaction: spectrumReaction,
     typing: spectrumTyping,
     text: spectrumText,
     markdown: spectrumMarkdown,
@@ -204,6 +206,30 @@ const knownMessages = new Map();
 // is the outbound reaction Message returned by `target.react()`, kept so
 // /unreact can `unsend()` it later.
 const reactionHandles = new Map();
+
+function normalizeReactionForIMessage(input) {
+  const value = String(input || "").trim();
+  const map = {
+    "❤️": "love",
+    "❤": "love",
+    "👍": "like",
+    "👎": "dislike",
+    "😂": "laugh",
+    "🤣": "laugh",
+    "‼️": "emphasize",
+    "!!": "emphasize",
+    "❓": "question",
+    "?": "question",
+  };
+  return map[value] || value;
+}
+
+function stripInvalidPartIndexTarget(target) {
+  if (!target || typeof target !== "object") return target;
+  const clone = { ...target };
+  delete clone.partIndex;
+  return clone;
+}
 
 function lruSet(map, key, value, cap) {
   if (map.has(key)) map.delete(key);
@@ -657,14 +683,28 @@ const server = http.createServer(async (req, res) => {
       if (!target) {
         return badRequest(res, "message not found");
       }
-      const handle = await target.react(emoji);
+      const reactionValue = normalizeReactionForIMessage(emoji);
+      let handle;
+      try {
+        handle = await target.react(reactionValue);
+      } catch (e) {
+        const message = e && e.message ? String(e.message) : String(e);
+        if (!/part index is out of range/i.test(message) || !spectrumReaction) {
+          throw e;
+        }
+        // Spectrum may attach a stale/invalid partIndex to iMessage audio
+        // attachment events. Photon docs say partIndex is optional for
+        // `setReaction`; retry the documented tapback without a partIndex.
+        const targetWithoutPart = stripInvalidPartIndexTarget(target);
+        handle = await space.send(spectrumReaction(reactionValue, targetWithoutPart));
+      }
       if (!handle) {
         return badRequest(res, "reactions not supported on this platform");
       }
       lruSet(
         reactionHandles,
         `${spaceId}\u0000${messageId}`,
-        { emoji, handle },
+        { emoji: reactionValue, handle },
         MAX_REACTION_HANDLES
       );
       return ok(res, { reactionId: handle.id ?? null });
