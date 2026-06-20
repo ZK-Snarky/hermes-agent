@@ -151,7 +151,7 @@ gateway.multiplex_profiles is on. ... Remove platforms.webhook from profile
 ```
 
 Port-binding platforms covered by this rule: `webhook`, `api_server`,
-`msgraph_webhook`, `feishu`, `wecom_callback`, `bluebubbles`, `sms`. Configure
+`msgraph_webhook`, `feishu`, `wecom_callback`, `sms`. Configure
 any of these **only on the default profile**; every profile is reachable through
 its `/p/<profile>/` prefix.
 

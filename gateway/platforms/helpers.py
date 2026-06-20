@@ -181,7 +181,7 @@ def strip_markdown(text: str) -> str:
     """Strip markdown formatting for plain-text platforms (SMS, iMessage, etc.).
 
     Replaces the identical ``_strip_markdown()`` functions previously
-    duplicated in sms.py, bluebubbles.py, and feishu.py.
+    duplicated in sms.py, feishu.py, and other HTTP adapters.
     """
     text = _RE_BOLD.sub(r"\1", text)
     text = _RE_ITALIC_STAR.sub(r"\1", text)
@@ -269,7 +269,7 @@ def redact_phone(phone: str) -> str:
     """Redact a phone number for logging, preserving country code and last 4.
 
     Replaces the identical ``_redact_phone()`` functions in signal.py,
-    sms.py, and bluebubbles.py.
+    sms.py and other HTTP adapters.
     """
     if not phone:
         return "<none>"

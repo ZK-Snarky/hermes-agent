@@ -4677,50 +4677,6 @@ _PLATFORMS = [
         "token_var": "WEIXIN_ACCOUNT_ID",
     },
     {
-        "key": "bluebubbles",
-        "label": "BlueBubbles (iMessage)",
-        "emoji": "💬",
-        "token_var": "BLUEBUBBLES_SERVER_URL",
-        "setup_instructions": [
-            "1. Install BlueBubbles on a Mac that will act as your iMessage server:",
-            "   https://bluebubbles.app/",
-            "2. Complete the BlueBubbles setup wizard — sign in with your Apple ID",
-            "3. In BlueBubbles Settings → API, note the Server URL and password",
-            "4. The server URL is typically http://<your-mac-ip>:1234",
-            "5. Hermes connects via the BlueBubbles REST API and receives",
-            "   incoming messages via a local webhook",
-            "6. To authorize users, use DM pairing: hermes pairing generate bluebubbles",
-            "   Share the code — the user sends it via iMessage to get approved",
-        ],
-        "vars": [
-            {
-                "name": "BLUEBUBBLES_SERVER_URL",
-                "prompt": "BlueBubbles server URL (e.g. http://192.168.1.10:1234)",
-                "password": False,
-                "help": "The URL shown in BlueBubbles Settings → API.",
-            },
-            {
-                "name": "BLUEBUBBLES_PASSWORD",
-                "prompt": "BlueBubbles server password",
-                "password": True,
-                "help": "The password shown in BlueBubbles Settings → API.",
-            },
-            {
-                "name": "BLUEBUBBLES_ALLOWED_USERS",
-                "prompt": "Pre-authorized phone numbers or iMessage IDs (comma-separated, or leave empty for DM pairing)",
-                "password": False,
-                "is_allowlist": True,
-                "help": "Optional — pre-authorize specific users. Leave empty to use DM pairing instead (recommended).",
-            },
-            {
-                "name": "BLUEBUBBLES_HOME_CHANNEL",
-                "prompt": "Home channel (phone number or iMessage ID for cron/notifications, or empty)",
-                "password": False,
-                "help": "Phone number or Apple ID to deliver cron results and notifications to.",
-            },
-        ],
-    },
-    {
         "key": "qqbot",
         "label": "QQ Bot",
         "emoji": "🐧",
@@ -6023,7 +5979,6 @@ def _builtin_setup_fn(key: str):
         # mattermost moved into the plugin: setup_fn is registered by
         # plugins/platforms/mattermost/adapter.py::register() and dispatched
         # via the plugin path in _configure_platform().
-        "bluebubbles": _s._setup_bluebubbles,
         "webhooks": _s._setup_webhooks,
         "signal": _setup_signal,
         "whatsapp": _setup_whatsapp,

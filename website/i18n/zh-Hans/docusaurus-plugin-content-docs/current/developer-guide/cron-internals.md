@@ -179,7 +179,6 @@ Cron 任务结果可投递到任何受支持的平台：
 | Feishu | `feishu` | 投递到飞书 |
 | WeCom | `wecom` | 投递到企业微信 |
 | Weixin | `weixin` | 投递到微信（WeChat） |
-| BlueBubbles | `bluebubbles` | 通过 BlueBubbles 投递到 iMessage |
 | QQ Bot | `qqbot` | 通过官方 API v2 投递到 QQ（腾讯） |
 
 对于 Telegram 话题，使用格式 `telegram:<chat_id>:<thread_id>`（例如 `telegram:-1001234567890:17585`）。

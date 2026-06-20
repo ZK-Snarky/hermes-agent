@@ -49,7 +49,6 @@ def test_send_image_accepts_metadata(module_name, class_name):
 # platform SDK isn't installed are skipped; an adapter that imports but
 # whose override drops metadata is a hard failure.
 _ALL_ADAPTERS = [
-    ("gateway.platforms.bluebubbles", "BlueBubblesAdapter"),
     ("gateway.platforms.dingtalk", "DingTalkAdapter"),
     ("gateway.platforms.discord", "DiscordAdapter"),
     ("gateway.platforms.email", "EmailAdapter"),

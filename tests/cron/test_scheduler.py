@@ -116,7 +116,7 @@ class TestResolveDeliveryTarget:
             "SMS_HOME_CHANNEL",
             "EMAIL_HOME_ADDRESS",
             "DINGTALK_HOME_CHANNEL",
-            "BLUEBUBBLES_HOME_CHANNEL",
+            "PHOTON_HOME_CHANNEL",
             "FEISHU_HOME_CHANNEL",
             "WECOM_HOME_CHANNEL",
             "WEIXIN_HOME_CHANNEL",
@@ -440,7 +440,7 @@ class TestRoutingIntents:
         keys = [(t["platform"].lower(), str(t["chat_id"]), t.get("thread_id")) for t in targets]
         assert len(keys) == len(set(keys))
 
-    def test_all_with_no_connected_channels_returns_empty(self, monkeypatch):
+    def test_all_with_no_connected_channels_returns_empty(self, monkeypatch, tmp_path):
         """deliver='all' with nothing connected returns [] — delivery is recorded as failed upstream."""
         from cron.scheduler import _resolve_delivery_targets
 
@@ -448,8 +448,9 @@ class TestRoutingIntents:
                     "SIGNAL_HOME_CHANNEL", "MATRIX_HOME_ROOM", "MATTERMOST_HOME_CHANNEL",
                     "SMS_HOME_CHANNEL", "EMAIL_HOME_ADDRESS", "DINGTALK_HOME_CHANNEL",
                     "FEISHU_HOME_CHANNEL", "WECOM_HOME_CHANNEL", "WEIXIN_HOME_CHANNEL",
-                    "BLUEBUBBLES_HOME_CHANNEL", "QQBOT_HOME_CHANNEL", "QQ_HOME_CHANNEL"):
+                    "PHOTON_HOME_CHANNEL", "PHOTON_ALLOWED_USERS", "QQBOT_HOME_CHANNEL", "QQ_HOME_CHANNEL"):
             monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("HERMES_ENV_FILE", str(tmp_path / "missing.env"))
 
         assert _resolve_delivery_targets({"deliver": "all", "origin": None}) == []
 
@@ -474,10 +475,13 @@ class TestRoutingIntents:
         discord = next(t for t in targets if t["platform"].lower() == "discord")
         assert discord["chat_id"] == "888"
 
-    def test_all_token_case_insensitive(self, monkeypatch):
+    def test_all_token_case_insensitive(self, monkeypatch, tmp_path):
         """'ALL' / 'All' / 'all' are all recognized."""
         from cron.scheduler import _resolve_delivery_targets
 
+        monkeypatch.setenv("HERMES_ENV_FILE", str(tmp_path / "missing.env"))
+        monkeypatch.delenv("SEBOS_PHOTON_RECIPIENT", raising=False)
+        monkeypatch.delenv("PHOTON_SIDECAR_TOKEN", raising=False)
         monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "-111")
         monkeypatch.setenv("DISCORD_HOME_CHANNEL", "-222")
 

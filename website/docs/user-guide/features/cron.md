@@ -250,7 +250,6 @@ When scheduling jobs, you specify where the output goes:
 | `"feishu"` | Feishu/Lark | |
 | `"wecom"` | WeCom | |
 | `"weixin"` | Weixin (WeChat) | |
-| `"bluebubbles"` | BlueBubbles (iMessage) | |
 | `"qqbot"` | QQ Bot (Tencent QQ) | |
 | `"all"` | Fan out to every connected home channel | Resolved at fire time |
 | `"telegram,discord"` | Fan out to a specific set of channels | Comma-separated list |

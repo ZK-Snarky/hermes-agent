@@ -11,8 +11,7 @@
 //   loopback `GET /inbound` (NDJSON). We pause pulling from the stream while
 //   no consumer is attached so a backlog isn't pulled-and-lost before the
 //   gateway connects.
-// Outbound (Hermes -> gRPC): `/send` drives `space.send(...)`; `/typing`
-//   sends the documented `typing("start" | "stop")` content builder.
+// Outbound (Hermes -> gRPC): `/send` drives `space.send(...)`.
 //
 // Protocol (all requests require `X-Hermes-Sidecar-Token: ${TOKEN}`):
 //   - GET  /inbound    -> 200 NDJSON stream; one JSON event per line, blank
@@ -31,8 +30,6 @@
 //   - POST /unreact     -> {"ok": true} | 400 soft failure
 //       body: {"spaceId": "...", "messageId": "<target msg id>",
 //              "reactionId": "..." | null (restart-recovery fallback)}
-//   - POST /typing      -> {"ok": true}
-//       body: {"spaceId": "...", "state": "start" | "stop"}
 //   - POST /shutdown    -> {"ok": true}; then process exits
 //
 // On SIGINT/SIGTERM the sidecar calls `app.stop()` (3s graceful) before
@@ -115,8 +112,7 @@ let Spectrum,
   attachment,
   voice,
   spectrumText,
-  spectrumMarkdown,
-  spectrumTyping;
+  spectrumMarkdown;
 try {
   ({
     Spectrum,
@@ -124,7 +120,6 @@ try {
     voice,
     text: spectrumText,
     markdown: spectrumMarkdown,
-    typing: spectrumTyping,
   } = await import("spectrum-ts"));
   ({ imessage } = await import("spectrum-ts/providers/imessage"));
 } catch (e) {
@@ -646,16 +641,6 @@ const server = http.createServer(async (req, res) => {
         return badRequest(res, "reaction not removable");
       }
       return badRequest(res, "no tracked reaction for message");
-    }
-    if (req.url === "/typing") {
-      const { spaceId, state = "start" } = body || {};
-      if (!spaceId) return badRequest(res, "spaceId is required");
-      if (state !== "start" && state !== "stop") {
-        return badRequest(res, "state must be start or stop");
-      }
-      const space = await resolveSpace(spaceId);
-      await space.send(spectrumTyping(state));
-      return ok(res, {});
     }
     res.statusCode = 404;
     res.setHeader("Content-Type", "application/json");

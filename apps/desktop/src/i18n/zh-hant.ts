@@ -968,7 +968,6 @@ export const zhHant = defineLocale({
         label: '主頻道名稱',
         help: '記錄和狀態輸出中顯示的主頻道名稱。'
       },
-      BLUEBUBBLES_ALLOW_ALL_USERS: { label: '允許所有 iMessage 使用者', help: '為 true 時略過 BlueBubbles 允許清單。' },
       MATTERMOST_ALLOW_ALL_USERS: { label: '允許所有 Mattermost 使用者' },
       MATTERMOST_HOME_CHANNEL: { label: '主頻道' },
       QQ_ALLOW_ALL_USERS: { label: '允許所有 QQ 使用者' },

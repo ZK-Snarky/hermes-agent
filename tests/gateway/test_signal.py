@@ -903,7 +903,7 @@ class TestSignalInboundMessageTypeClassification:
     @pytest.mark.asyncio
     async def test_unknown_mime_attachment_falls_back_to_document(self, monkeypatch):
         """Unknown/exotic MIME types fall through to DOCUMENT (catch-all),
-        matching the WhatsApp/Slack/BlueBubbles classification pattern."""
+        matching the WhatsApp/Slack classification pattern."""
         from gateway.platforms.base import MessageType
 
         event = await self._dispatch_single_attachment(

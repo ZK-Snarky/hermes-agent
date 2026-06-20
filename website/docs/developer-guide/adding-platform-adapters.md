@@ -618,7 +618,7 @@ Before marking a new platform PR as complete, run a parity audit against an esta
 
 ```bash
 # Find every .py file mentioning the reference platform
-search_files "bluebubbles" output_mode="files_only" file_glob="*.py"
+search_files "photon" output_mode="files_only" file_glob="*.py"
 
 # Find every .py file mentioning the new platform
 search_files "newplat" output_mode="files_only" file_glob="*.py"
@@ -686,7 +686,7 @@ async def disconnect(self):
 
 | Adapter | Pattern | Complexity | Good reference for |
 |---------|---------|------------|-------------------|
-| `bluebubbles.py` | REST + webhook | Medium | Simple REST API integration |
+| `photon/adapter.py` | Persistent sidecar | Medium | Plugin adapter integration |
 | `weixin.py` | Long-poll + CDN | High | Media handling, encryption |
 | `wecom_callback.py` | Callback/webhook | Medium | HTTP server, AES crypto, multi-app |
 | `telegram.py` | Long-poll + Bot API | High | Full-featured adapter with groups, threads |

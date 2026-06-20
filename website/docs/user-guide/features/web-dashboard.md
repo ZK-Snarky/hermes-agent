@@ -346,7 +346,7 @@ onboards Telegram/Discord/etc. users to a paired gateway. Full parity with
 
 Connect Hermes to any messaging platform from the browser — full parity with
 `hermes setup gateway`. The page lists every supported channel (Telegram,
-Discord, Slack, Matrix, Mattermost, WhatsApp, Signal, BlueBubbles/iMessage,
+Discord, Slack, Matrix, Mattermost, WhatsApp, Signal, Photon/iMessage,
 Email, SMS/Twilio, DingTalk, Feishu/Lark, WeCom, WeChat, QQ Bot, Yuanbao, plus
 the API server and webhook endpoints) with its live connection status.
 

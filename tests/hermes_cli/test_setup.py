@@ -153,8 +153,6 @@ def test_setup_gateway_skips_service_install_when_systemctl_missing(monkeypatch,
         "MATRIX_USER_ID": "@alice:example.com",
         "MATRIX_PASSWORD": "",
         "MATRIX_ACCESS_TOKEN": "token",
-        "BLUEBUBBLES_SERVER_URL": "",
-        "BLUEBUBBLES_HOME_CHANNEL": "",
         "WHATSAPP_ENABLED": "",
         "WEBHOOK_ENABLED": "",
     }
@@ -192,8 +190,6 @@ def test_setup_gateway_in_container_shows_docker_guidance(monkeypatch, capsys):
         "MATRIX_USER_ID": "@alice:example.com",
         "MATRIX_PASSWORD": "",
         "MATRIX_ACCESS_TOKEN": "token",
-        "BLUEBUBBLES_SERVER_URL": "",
-        "BLUEBUBBLES_HOME_CHANNEL": "",
         "WHATSAPP_ENABLED": "",
         "WEBHOOK_ENABLED": "",
     }

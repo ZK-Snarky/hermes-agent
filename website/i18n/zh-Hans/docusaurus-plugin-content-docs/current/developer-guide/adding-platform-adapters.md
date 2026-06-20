@@ -614,7 +614,7 @@ _PLATFORM_HINTS = {
 
 ```bash
 # 查找所有提及参考平台的 .py 文件
-search_files "bluebubbles" output_mode="files_only" file_glob="*.py"
+search_files "photon" output_mode="files_only" file_glob="*.py"
 
 # 查找所有提及新平台的 .py 文件
 search_files "newplat" output_mode="files_only" file_glob="*.py"
@@ -682,7 +682,7 @@ async def disconnect(self):
 
 | 适配器 | 模式 | 复杂度 | 适合参考的场景 |
 |---------|---------|------------|-------------------|
-| `bluebubbles.py` | REST + webhook | 中 | 简单 REST API 集成 |
+| `photon/adapter.py` | 持久 sidecar | 中 | 插件适配器集成 |
 | `weixin.py` | 长轮询 + CDN | 高 | 媒体处理、加密 |
 | `wecom_callback.py` | 回调/webhook | 中 | HTTP 服务器、AES 加密、多应用 |
 | `telegram.py` | 长轮询 + Bot API | 高 | 支持群组、线程的全功能适配器 |

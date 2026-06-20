@@ -77,7 +77,7 @@ _PHOTON_SPECTRUM_API_BASE = "https://spectrum.photon.codes"
 
 # Photon iMessage messages from the SDK side have no documented hard
 # limit, but the underlying iMessage protocol limits practical message
-# size to ~16 KB.  Keep a conservative cap that matches BlueBubbles.
+# size to ~16 KB.  Keep a conservative cap that matches iMessage delivery limits.
 _MAX_MESSAGE_LENGTH = 8000
 
 # Dedup parameters — the gRPC stream is at-least-once, and a sidecar
@@ -91,7 +91,7 @@ _SEBOS_AUDIO_INBOX = Path.home() / ".hermes" / "sebos" / "inbox" / "audio"
 
 # Group-chat mention wake words. When ``require_mention`` is enabled, group
 # messages are ignored unless they match one of these patterns — same
-# behavior and defaults as the BlueBubbles iMessage channel so the two
+# behavior and defaults as iMessage channels so the two
 # iMessage adapters gate group chats identically.
 _DEFAULT_MENTION_PATTERNS = [
     r"(?<![\w@])@?hermes\s+agent\b[,:\-]?",
@@ -242,7 +242,7 @@ class PhotonAdapter(BasePlatformAdapter):
         # requiring the model to thread message ids through tool calls.
         self._last_inbound_by_chat: Dict[str, str] = {}
 
-        # Group-chat mention gating (parity with BlueBubbles). When enabled,
+        # Group-chat mention gating (iMessage parity). When enabled,
         # group messages are ignored unless they match a wake word; DMs are
         # always processed. Config key wins, then env var.
         _require_mention = extra.get("require_mention")
@@ -257,7 +257,7 @@ class PhotonAdapter(BasePlatformAdapter):
             else os.getenv("PHOTON_MENTION_PATTERNS")
         )
 
-    # -- Group-mention gating (parity with BlueBubbles) -------------------
+    # -- Group-mention gating (iMessage parity) -------------------
 
     @staticmethod
     def _compile_mention_patterns(raw: Any) -> "list[re.Pattern]":
@@ -265,7 +265,7 @@ class PhotonAdapter(BasePlatformAdapter):
 
         ``raw`` is a list (config or env JSON), a string (env var: JSON
         list, or comma/newline-separated), or None (use Hermes defaults).
-        Mirrors the BlueBubbles implementation so both iMessage channels
+        Matches iMessage behavior so Photon
         accept the same configuration shapes.
         """
         if raw is None:
@@ -536,7 +536,7 @@ class PhotonAdapter(BasePlatformAdapter):
             "SHARED_CLOUD_UNSAFE",
             "Photon iMessage project is shared-cloud. Shared-pool projects "
             "can emit server-side fallback/offline texts that Hermes cannot "
-            "suppress. Use BlueBubbles/local routing or upgrade Photon to a "
+            "suppress. Use local routing or upgrade Photon to a "
             "dedicated line. Set PHOTON_ALLOW_SHARED_UNSAFE=true only for "
             "isolated diagnostics.",
             retryable=False,
@@ -744,7 +744,7 @@ class PhotonAdapter(BasePlatformAdapter):
             timestamp = datetime.now(tz=timezone.utc)
 
         # Media attachments (local cached paths) handed to the agent via the
-        # gateway's image-routing path, exactly like the BlueBubbles channel.
+        # gateway's image-routing path, like other media-capable channels.
         media_urls: List[str] = []
         media_types: List[str] = []
 
@@ -861,7 +861,7 @@ class PhotonAdapter(BasePlatformAdapter):
             text = f"[Photon content type not handled: {ctype}]"
             mtype = MessageType.TEXT
 
-        # Group-mention gating (parity with BlueBubbles). In group chats with
+        # Group-mention gating (iMessage parity). In group chats with
         # require_mention enabled, drop messages that don't hit a wake word;
         # strip the leading wake word from the ones that do. DMs are never
         # gated.
@@ -1147,12 +1147,12 @@ class PhotonAdapter(BasePlatformAdapter):
     ) -> SendResult:
         return await self._sidecar_send(chat_id, self.format_message(content))
 
-    # -- Outbound media (parity with the BlueBubbles iMessage channel) -----
+    # -- Outbound media (iMessage parity) -----
     #
     # Photon ships outbound attachments via spectrum-ts' `attachment()` /
     # `voice()` content builders. The sidecar's `/send-attachment` endpoint
     # wraps `space.send(attachment(path, {...}))`. These overrides mirror
-    # BlueBubbles: URL-based helpers cache to a local path first, file-based
+    # URL-based helpers cache to a local path first, file-based
     # helpers pass the path straight through.
 
     async def send_image(
@@ -1241,20 +1241,12 @@ class PhotonAdapter(BasePlatformAdapter):
         )
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
-        try:
-            await self._sidecar_call(
-                "/typing", {"spaceId": chat_id, "state": "start"}
-            )
-        except Exception as e:
-            logger.debug("[photon] send_typing failed: %s", e)
+        # iMessage typing indicators are noisy and can drift into duplicate/fallback
+        # behavior on shared routes. Photon intentionally no-ops typing.
+        return None
 
     async def stop_typing(self, chat_id: str) -> None:
-        try:
-            await self._sidecar_call(
-                "/typing", {"spaceId": chat_id, "state": "stop"}
-            )
-        except Exception as e:
-            logger.debug("[photon] stop_typing failed: %s", e)
+        return None
 
     # -- Reactions (tapbacks) -----------------------------------------------
     #
@@ -1622,7 +1614,7 @@ def _attachment_message_type(mime: str) -> MessageType:
 
 
 # MIME → file-extension maps for caching inbound attachment bytes. These mirror
-# the BlueBubbles iMessage channel so both adapters name cached media the same.
+# iMessage media naming.
 _IMAGE_EXT_BY_MIME = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -1817,7 +1809,7 @@ def register(ctx) -> None:
         emoji="📱",
         # iMessage carries E.164 phone numbers — treat session descriptions
         # as PII-sensitive so they get redacted before reaching the LLM
-        # (matches the BlueBubbles iMessage channel in _PII_SAFE_PLATFORMS).
+        # (matches iMessage handling in _PII_SAFE_PLATFORMS).
         pii_safe=True,
         allow_update_command=True,
         platform_hint=(

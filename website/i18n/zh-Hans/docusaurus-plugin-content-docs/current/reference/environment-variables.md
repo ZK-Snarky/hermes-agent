@@ -360,13 +360,6 @@ description: "Hermes Agent 使用的所有环境变量完整参考"
 | `WEIXIN_HOME_CHANNEL` | cron 投递和通知的微信聊天 ID |
 | `WEIXIN_HOME_CHANNEL_NAME` | 微信主频道的显示名称 |
 | `WEIXIN_ALLOW_ALL_USERS` | 无需白名单允许所有微信用户（`true`/`false`） |
-| `BLUEBUBBLES_SERVER_URL` | BlueBubbles 服务器 URL（例如 `http://192.168.1.10:1234`） |
-| `BLUEBUBBLES_PASSWORD` | BlueBubbles 服务器密码 |
-| `BLUEBUBBLES_WEBHOOK_HOST` | webhook 监听绑定地址（默认：`127.0.0.1`） |
-| `BLUEBUBBLES_WEBHOOK_PORT` | webhook 监听端口（默认：`8645`） |
-| `BLUEBUBBLES_HOME_CHANNEL` | cron/通知投递的手机/邮箱 |
-| `BLUEBUBBLES_ALLOWED_USERS` | 逗号分隔的授权用户 |
-| `BLUEBUBBLES_ALLOW_ALL_USERS` | 允许所有用户（`true`/`false`） |
 | `QQ_APP_ID` | 来自 [q.qq.com](https://q.qq.com) 的 QQ Bot App ID |
 | `QQ_CLIENT_SECRET` | 来自 [q.qq.com](https://q.qq.com) 的 QQ Bot App Secret |
 | `QQ_STT_API_KEY` | 外部 STT 回退提供商的 API 密钥（可选，当 QQ 内置 ASR 未返回文本时使用） |

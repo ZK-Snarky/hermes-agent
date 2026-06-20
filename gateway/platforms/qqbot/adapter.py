@@ -3101,7 +3101,7 @@ class QQAdapter(BasePlatformAdapter):
         """Format message for QQ.
 
         When markdown_support is enabled, content is sent as-is (QQ renders it).
-        When disabled, strip markdown via shared helper (same as BlueBubbles/SMS).
+        When disabled, strip markdown via shared helper (same as SMS).
         """
         if self._markdown_support:
             return content

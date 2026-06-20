@@ -168,7 +168,7 @@ hermes gateway status       Check status
 hermes gateway setup        Configure platforms
 ```
 
-支持的平台：Telegram、Discord、Slack、WhatsApp、Signal、Email、SMS、Matrix、Mattermost、Home Assistant、DingTalk、Feishu、WeCom、BlueBubbles（iMessage）、Weixin（WeChat）、API Server、Webhooks。Open WebUI 通过 API Server 适配器连接。
+支持的平台：Telegram、Discord、Slack、WhatsApp、Signal、Email、SMS、Matrix、Mattermost、Home Assistant、DingTalk、Feishu、WeCom、Weixin（WeChat）、API Server、Webhooks。Open WebUI 通过 API Server 适配器连接。
 
 平台文档：https://hermes-agent.nousresearch.com/docs/user-guide/messaging/
 

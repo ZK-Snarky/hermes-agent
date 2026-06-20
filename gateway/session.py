@@ -205,7 +205,6 @@ _PII_SAFE_PLATFORMS = frozenset({
     Platform.WHATSAPP,
     Platform.SIGNAL,
     Platform.TELEGRAM,
-    Platform.BLUEBUBBLES,
 })
 """Platforms where user IDs can be safely redacted (no in-message mention system
 that requires raw IDs).  Discord is excluded because mentions use ``<@user_id>``
@@ -378,7 +377,6 @@ def build_session_context_prompt(
                 "Do not promise to perform these actions. If the user asks, explain "
                 "that you can only read messages sent directly to you and respond."
             )
-    elif context.source.platform == Platform.BLUEBUBBLES:
         lines.append("")
         lines.append(
             "**Platform notes:** You are responding via iMessage. "

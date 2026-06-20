@@ -4426,17 +4426,6 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
         "env_vars": ("WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN", "WEIXIN_BASE_URL"),
         "required_env": ("WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN"),
     },
-    "bluebubbles": {
-        "name": "BlueBubbles (iMessage)",
-        "description": "Use Hermes through iMessage via a BlueBubbles server.",
-        "docs_url": "https://bluebubbles.app/",
-        "env_vars": (
-            "BLUEBUBBLES_SERVER_URL",
-            "BLUEBUBBLES_PASSWORD",
-            "BLUEBUBBLES_ALLOWED_USERS",
-        ),
-        "required_env": ("BLUEBUBBLES_SERVER_URL", "BLUEBUBBLES_PASSWORD"),
-    },
     "qqbot": {
         "name": "QQ Bot",
         "description": "Connect Hermes to a QQ Bot from the QQ Open Platform.",
@@ -4482,7 +4471,6 @@ _PLATFORM_ORDER: tuple[str, ...] = (
     "matrix",
     "whatsapp",
     "signal",
-    "bluebubbles",
     "homeassistant",
     "email",
     "sms",

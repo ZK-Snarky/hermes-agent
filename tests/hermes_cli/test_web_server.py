@@ -1363,7 +1363,7 @@ class TestWebServerEndpoints:
 
         managed = _channel_managed_env_keys()
         assert "DISCORD_HOME_CHANNEL" in managed
-        assert "BLUEBUBBLES_ALLOW_ALL_USERS" in managed
+        assert "PHOTON_ALLOWED_USERS" in managed
         assert "MATTERMOST_ALLOW_ALL_USERS" in managed
         assert "GATEWAY_PROXY_URL" not in managed
         assert "GATEWAY_PROXY_URL" in _MESSAGING_KEYS_PAGE_KEYS

@@ -1000,10 +1000,6 @@ export const ja = defineLocale({
         label: 'ホームチャンネル名',
         help: 'ログやステータス出力でのホームチャンネルの表示名。'
       },
-      BLUEBUBBLES_ALLOW_ALL_USERS: {
-        label: 'すべての iMessage ユーザーを許可',
-        help: 'true にすると BlueBubbles の許可リストをスキップします。'
-      },
       MATTERMOST_ALLOW_ALL_USERS: { label: 'すべての Mattermost ユーザーを許可' },
       MATTERMOST_HOME_CHANNEL: { label: 'ホームチャンネル' },
       QQ_ALLOW_ALL_USERS: { label: 'すべての QQ ユーザーを許可' },

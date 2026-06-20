@@ -161,7 +161,6 @@ class Platform(Enum):
     WECOM = "wecom"
     WECOM_CALLBACK = "wecom_callback"
     WEIXIN = "weixin"
-    BLUEBUBBLES = "bluebubbles"
     QQBOT = "qqbot"
     YUANBAO = "yuanbao"
     RELAY = "relay"  # generic relay adapter fronted by the connector (EXPERIMENTAL)
@@ -479,9 +478,6 @@ _PLATFORM_CONNECTED_CHECKERS: dict[Platform, Callable[[PlatformConfig], bool]] =
     Platform.WECOM: lambda cfg: bool(cfg.extra.get("bot_id")),
     Platform.WECOM_CALLBACK: lambda cfg: bool(
         cfg.extra.get("corp_id") or cfg.extra.get("apps")
-    ),
-    Platform.BLUEBUBBLES: lambda cfg: bool(
-        cfg.extra.get("server_url") and cfg.extra.get("password")
     ),
     Platform.QQBOT: lambda cfg: bool(
         cfg.extra.get("app_id") and cfg.extra.get("client_secret")
@@ -1904,46 +1900,6 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
                 name=os.getenv("WEIXIN_HOME_CHANNEL_NAME", "Home"),
                 thread_id=os.getenv("WEIXIN_HOME_CHANNEL_THREAD_ID") or None,
             )
-
-    # BlueBubbles (iMessage)
-    bluebubbles_server_url = os.getenv("BLUEBUBBLES_SERVER_URL")
-    bluebubbles_password = os.getenv("BLUEBUBBLES_PASSWORD")
-    if bluebubbles_server_url and bluebubbles_password:
-        if Platform.BLUEBUBBLES not in config.platforms:
-            config.platforms[Platform.BLUEBUBBLES] = PlatformConfig()
-        config.platforms[Platform.BLUEBUBBLES].enabled = True
-        config.platforms[Platform.BLUEBUBBLES].extra.update({
-            "server_url": bluebubbles_server_url.rstrip("/"),
-            "password": bluebubbles_password,
-            "webhook_host": os.getenv("BLUEBUBBLES_WEBHOOK_HOST", "127.0.0.1"),
-            "webhook_port": int(os.getenv("BLUEBUBBLES_WEBHOOK_PORT", "8645")),
-            "webhook_path": os.getenv("BLUEBUBBLES_WEBHOOK_PATH", "/bluebubbles-webhook"),
-            "send_read_receipts": os.getenv("BLUEBUBBLES_SEND_READ_RECEIPTS", "true").lower() in {"true", "1", "yes"},
-        })
-        bluebubbles_require_mention = os.getenv("BLUEBUBBLES_REQUIRE_MENTION")
-        if bluebubbles_require_mention is not None:
-            config.platforms[Platform.BLUEBUBBLES].extra["require_mention"] = (
-                bluebubbles_require_mention.lower() in {"true", "1", "yes", "on"}
-            )
-        bluebubbles_mention_patterns = os.getenv("BLUEBUBBLES_MENTION_PATTERNS")
-        if bluebubbles_mention_patterns:
-            try:
-                parsed_patterns = json.loads(bluebubbles_mention_patterns)
-            except Exception:
-                parsed_patterns = [
-                    part.strip()
-                    for part in bluebubbles_mention_patterns.replace("\n", ",").split(",")
-                    if part.strip()
-                ]
-            config.platforms[Platform.BLUEBUBBLES].extra["mention_patterns"] = parsed_patterns
-    bluebubbles_home = os.getenv("BLUEBUBBLES_HOME_CHANNEL")
-    if bluebubbles_home and Platform.BLUEBUBBLES in config.platforms:
-        config.platforms[Platform.BLUEBUBBLES].home_channel = HomeChannel(
-            platform=Platform.BLUEBUBBLES,
-            chat_id=bluebubbles_home,
-            name=os.getenv("BLUEBUBBLES_HOME_CHANNEL_NAME", "Home"),
-            thread_id=os.getenv("BLUEBUBBLES_HOME_CHANNEL_THREAD_ID") or None,
-        )
 
     # QQ (Official Bot API v2)
     qq_app_id = os.getenv("QQ_APP_ID")

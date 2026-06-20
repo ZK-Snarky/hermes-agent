@@ -140,7 +140,7 @@ gateway:
 
 Both keys also accept env vars (`PHOTON_REQUIRE_MENTION`,
 `PHOTON_MENTION_PATTERNS`). This is the same mention-gating model the
-BlueBubbles iMessage channel uses.
+Photon iMessage channel uses.
 
 ## Start the gateway
 

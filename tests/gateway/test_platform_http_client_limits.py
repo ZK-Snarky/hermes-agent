@@ -4,7 +4,6 @@ adapters use to tighten their keep-alive pool.
 Context: #18451 — on macOS behind Cloudflare Warp, httpx's default
 keepalive_expiry=5s let idle CLOSE_WAIT sockets accumulate across
 multiple long-lived gateway adapters (QQ Bot, Feishu, WeCom, DingTalk,
-Signal, BlueBubbles, WeCom-callback) until the process hit the default
 256 fd limit.  These tests just verify the helper returns sensibly
 tuned limits and respects env-var overrides; the actual fd-pressure
 behaviour is only observable at runtime under load.
@@ -80,7 +79,6 @@ def test_helper_is_importable_from_every_platform_that_uses_it():
     import gateway.platforms.wecom  # noqa: F401
     import gateway.platforms.dingtalk  # noqa: F401
     import gateway.platforms.signal  # noqa: F401
-    import gateway.platforms.bluebubbles  # noqa: F401
     import gateway.platforms.wecom_callback  # noqa: F401
 
 

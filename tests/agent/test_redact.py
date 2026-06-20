@@ -410,7 +410,7 @@ class TestWebUrlsNotRedacted:
     def test_http_access_log_request_target_passes_through(self):
         text = (
             'INFO aiohttp.access: 127.0.0.1 "POST '
-            '/bluebubbles-webhook?password=webhookSecret123&event=new-message '
+            '/webhook?password=webhookSecret123&event=new-message '
             'HTTP/1.1" 200 173 "-" "test-client"'
         )
         assert redact_sensitive_text(text) == text

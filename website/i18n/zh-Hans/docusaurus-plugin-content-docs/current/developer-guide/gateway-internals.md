@@ -161,7 +161,6 @@ gateway/platforms/
 ├── feishu.py            # 飞书/Lark WebSocket 或 webhook
 ├── wecom.py             # 企业微信（WeCom）回调
 ├── weixin.py            # 微信（个人版，通过 iLink Bot API）
-├── bluebubbles.py       # Apple iMessage（通过 BlueBubbles macOS 服务端）
 ├── qqbot/               # QQ Bot（腾讯 QQ，通过官方 API v2，子包：adapter.py、crypto.py、keyboards.py 等）
 ├── yuanbao.py           # 元宝（腾讯）私信/群组适配器
 ├── feishu_comment.py    # 飞书文档/云盘评论回复处理器

@@ -6,7 +6,7 @@ description: "通过 Telegram、Discord、Slack、WhatsApp、Signal、SMS、Emai
 
 # 消息网关
 
-通过 Telegram、Discord、Slack、WhatsApp、Signal、SMS、Email、Home Assistant、Mattermost、Matrix、DingTalk、Feishu/Lark、WeCom、Weixin、BlueBubbles（iMessage）、QQ、Yuanbao、Microsoft Teams、LINE、ntfy 或浏览器与 Hermes 对话。网关是一个单一后台进程，连接所有已配置的平台，管理会话，运行 cron 任务，并传递语音消息。
+通过 Telegram、Discord、Slack、WhatsApp、Signal、SMS、Email、Home Assistant、Mattermost、Matrix、DingTalk、Feishu/Lark、WeCom、Weixin、QQ、Yuanbao、Microsoft Teams、LINE、ntfy 或浏览器与 Hermes 对话。网关是一个单一后台进程，连接所有已配置的平台，管理会话，运行 cron 任务，并传递语音消息。
 
 完整的语音功能集——包括 CLI 麦克风模式、消息中的语音回复以及 Discord 语音频道对话——请参阅 [Voice Mode](/user-guide/features/voice-mode) 和 [Use Voice Mode with Hermes](/guides/use-voice-mode-with-hermes)。
 
@@ -30,7 +30,6 @@ description: "通过 Telegram、Discord、Slack、WhatsApp、Signal、SMS、Emai
 | WeCom | ✅ | ✅ | ✅ | — | — | — | — |
 | WeCom Callback | — | — | — | — | — | — | — |
 | Weixin | ✅ | ✅ | ✅ | — | — | ✅ | ✅ |
-| BlueBubbles | — | ✅ | ✅ | — | ✅ | ✅ | — |
 | QQ | ✅ | ✅ | ✅ | — | — | ✅ | — |
 | Yuanbao | ✅ | ✅ | ✅ | — | — | ✅ | ✅ |
 | Microsoft Teams | — | ✅ | — | ✅ | — | ✅ | — |
@@ -61,7 +60,6 @@ flowchart TB
     wc[WeCom]
     wcb[WeCom Callback]
     wx[Weixin]
-    bb[BlueBubbles]
     qq[QQ]
     yb[Yuanbao]
     ms[Microsoft Teams]
@@ -437,7 +435,6 @@ launchd plist 是静态的——如果你在配置网关后安装了新工具（
 | WeCom | `hermes-wecom` | 完整工具，包括终端 |
 | WeCom Callback | `hermes-wecom-callback` | 完整工具，包括终端 |
 | Weixin | `hermes-weixin` | 完整工具，包括终端 |
-| BlueBubbles | `hermes-bluebubbles` | 完整工具，包括终端 |
 | QQBot | `hermes-qqbot` | 完整工具，包括终端 |
 | Yuanbao | `hermes-yuanbao` | 完整工具，包括终端 |
 | Microsoft Teams | `hermes-teams` | 完整工具，包括终端 |
@@ -540,7 +537,6 @@ display:
 - [WeCom 配置](wecom.md)
 - [WeCom Callback 配置](wecom-callback.md)
 - [Weixin 配置（微信）](weixin.md)
-- [BlueBubbles 配置（iMessage）](bluebubbles.md)
 - [QQBot 配置](qqbot.md)
 - [Yuanbao 配置](yuanbao.md)
 - [Microsoft Teams 配置](teams.md)

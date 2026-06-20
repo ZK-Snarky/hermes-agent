@@ -1,6 +1,6 @@
 """Group-chat mention-gating tests for PhotonAdapter.
 
-Parity with the BlueBubbles iMessage channel: when ``require_mention`` is
+when ``require_mention`` is
 enabled, group messages are dropped unless they hit a wake-word pattern,
 and the leading wake word is stripped from the ones that pass. DMs are
 never gated.

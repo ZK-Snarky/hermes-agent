@@ -879,10 +879,6 @@ export const en: Translations = {
         label: 'Home channel name',
         help: 'Display name for the home channel in logs and status output.'
       },
-      BLUEBUBBLES_ALLOW_ALL_USERS: {
-        label: 'Allow all iMessage users',
-        help: 'When true, skip the BlueBubbles allowlist.'
-      },
       MATTERMOST_ALLOW_ALL_USERS: { label: 'Allow all Mattermost users' },
       MATTERMOST_HOME_CHANNEL: { label: 'Home channel' },
       QQ_ALLOW_ALL_USERS: { label: 'Allow all QQ users' },

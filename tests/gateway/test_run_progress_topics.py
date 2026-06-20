@@ -886,26 +886,6 @@ async def test_run_agent_interim_commentary_works_with_tool_progress_off(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_run_agent_bluebubbles_uses_commentary_send_path_for_quick_replies(monkeypatch, tmp_path):
-    adapter, result = await _run_with_agent(
-        monkeypatch,
-        tmp_path,
-        CommentaryAgent,
-        session_id="sess-bluebubbles-commentary",
-        config_data={"display": {"interim_assistant_messages": True}},
-        platform=Platform.BLUEBUBBLES,
-        chat_id="iMessage;-;user@example.com",
-        chat_type="dm",
-        thread_id=None,
-        adapter_cls=NonEditingProgressCaptureAdapter,
-    )
-
-    assert result.get("already_sent") is not True
-    assert [call["content"] for call in adapter.sent] == ["I'll inspect the repo first."]
-    assert adapter.edits == []
-
-
-@pytest.mark.asyncio
 async def test_run_agent_previewed_final_marks_already_sent(monkeypatch, tmp_path):
     adapter, result = await _run_with_agent(
         monkeypatch,

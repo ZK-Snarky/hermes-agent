@@ -271,7 +271,6 @@ hermes cron status
 | `"feishu"` | 飞书/Lark | |
 | `"wecom"` | 企业微信 | |
 | `"weixin"` | 微信（WeChat） | |
-| `"bluebubbles"` | BlueBubbles（iMessage） | |
 | `"qqbot"` | QQ Bot（腾讯 QQ） | |
 | `"all"` | 扇出到所有已连接的主频道 | 触发时解析 |
 | `"telegram,discord"` | 扇出到指定的一组频道 | 逗号分隔列表 |

@@ -161,7 +161,6 @@ gateway/platforms/
 ├── feishu.py            # Feishu/Lark WebSocket or webhook
 ├── wecom.py             # WeCom (WeChat Work) callback
 ├── weixin.py            # Weixin (personal WeChat) via iLink Bot API
-├── bluebubbles.py       # Apple iMessage via BlueBubbles macOS server
 ├── qqbot/               # QQ Bot (Tencent QQ) via Official API v2 (sub-package: adapter.py, crypto.py, keyboards.py, …)
 ├── yuanbao.py           # Yuanbao (Tencent) DM/group adapter
 ├── feishu_comment.py    # Feishu document/drive comment-reply handler

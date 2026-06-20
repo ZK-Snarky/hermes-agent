@@ -105,7 +105,6 @@ Platform toolsets define the complete tool configuration for a deployment target
 | `hermes-mattermost` | Same as `hermes-cli`. |
 | `hermes-email` | Same as `hermes-cli`. |
 | `hermes-sms` | Same as `hermes-cli`. |
-| `hermes-bluebubbles` | Same as `hermes-cli`. |
 | `hermes-dingtalk` | Same as `hermes-cli`. |
 | `hermes-feishu` | Adds the five `feishu_doc_*` / `feishu_drive_*` tools (only used by the document-comment handler, not the regular chat adapter). |
 | `hermes-qqbot` | Same as `hermes-cli`. |

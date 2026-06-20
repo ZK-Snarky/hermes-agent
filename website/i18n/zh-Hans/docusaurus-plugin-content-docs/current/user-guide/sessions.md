@@ -63,7 +63,6 @@ Hermes 存储 session 历史以便恢复对话，但不会在每次对话时重�
 | `feishu` | 飞书/Lark 消息 |
 | `wecom` | 企业微信 |
 | `weixin` | 微信（个人版） |
-| `bluebubbles` | 通过 BlueBubbles macOS 服务器的 Apple iMessage |
 | `qqbot` | QQ Bot（腾讯 QQ）通过官方 API v2 |
 | `homeassistant` | Home Assistant 对话 |
 | `webhook` | 传入 webhook |
