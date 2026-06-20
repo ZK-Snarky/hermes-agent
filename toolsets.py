@@ -71,6 +71,8 @@ _HERMES_CORE_TOOLS = [
     "kanban_unblock",
     # Computer use (macOS, gated on cua-driver being installed via check_fn)
     "computer_use",
+    # sebOS Live Board event emission (gated on ~/.hermes/sebos via check_fn)
+    "sebos_event",
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,
