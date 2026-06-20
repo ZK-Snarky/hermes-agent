@@ -653,11 +653,9 @@ class PhotonAdapter(BasePlatformAdapter):
         if int(result.get("inserted") or 0) <= 0:
             return False
         if int(result.get("transcribed_ok") or 0) > 0:
-            body = self._latest_journal_body(f"photon:{message_id}") if message_id else None
-            reacted = await self._send_ack_reaction(space_id, message_id, "❤️")
-            if body:
-                await self._send_quiet(space_id, self.truncate_message(f"Audio journal saved:\n\n{body}")[0])
-            elif not reacted:
+            # Keep chat clean: no full transcript echo. Seb wants the audio saved,
+            # then a quiet native-feeling acknowledgement.
+            if not await self._send_ack_reaction(space_id, message_id, "❤️"):
                 await self._send_quiet(space_id, "Audio journal saved.")
         else:
             await self._send_quiet(space_id, "Audio received, but transcription failed.")
