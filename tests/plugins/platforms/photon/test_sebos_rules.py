@@ -135,8 +135,8 @@ async def test_sebos_rules_audio_wins_before_text(monkeypatch: pytest.MonkeyPatc
     calls = []
 
     async def fake_run(*args, stdin=None, timeout=20.0):
-        calls.append(args)
-        return {"status": "ok"}
+        calls.append((args, timeout))
+        return {"intent": "journal", "status": "ok", "reply": "Journal saved."}
 
     sent = []
 
@@ -156,5 +156,40 @@ async def test_sebos_rules_audio_wins_before_text(monkeypatch: pytest.MonkeyPatc
     )
 
     assert result == "handled"
-    assert calls[0][0] == "sebos-photon-ingest-audio"
-    assert sent == [("space-1", "Audio saved.")]
+    assert calls[0][0][:5] == ("sebos-route-command", "--audio-path", str(adapter_module._SEBOS_AUDIO_INBOX / "msg-1.m4a"), "--write", "--db")
+    assert calls[0][0][5] == str(adapter_module._SEBOS_DB_PATH)
+    assert calls[0][0][6] == "--json"
+    assert calls[0][1] == 120.0
+    assert sent == [("space-1", "Journal saved.")]
+
+
+@pytest.mark.asyncio
+async def test_sebos_rules_audio_question_routes_transcript_to_assistant(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    adapter = _make_adapter(monkeypatch)
+    audio = tmp_path / "question.m4a"
+    audio.write_bytes(b"fake-audio")
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        return {
+            "intent": "ask",
+            "status": "ignored",
+            "reply": "",
+            "details": {"body": "What's the difference between IUL and whole life?"},
+        }
+
+    async def fake_send(space_id: str, text: str) -> None:
+        raise AssertionError("assistant handoff should not send a sebOS ack")
+
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+
+    result = await adapter._handle_sebos_rules(
+        space_id="space-1",
+        message_id="msg-question",
+        text="",
+        mtype=MessageType.VOICE,
+        media_urls=[str(audio)],
+        media_types=["audio/mp4"],
+    )
+
+    assert result == "What's the difference between IUL and whole life?"

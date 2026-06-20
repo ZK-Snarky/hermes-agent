@@ -436,27 +436,33 @@ class PhotonAdapter(BasePlatformAdapter):
             path for path, mime in zip(media_urls, media_types)
             if mtype in {MessageType.AUDIO, MessageType.VOICE} or (mime or "").lower().startswith("audio/")
         ]
-        # Audio wins before any text fallback. Voice notes are journal signal, not
-        # normal assistant chat.
+        # Audio wins before any text fallback. Voice notes are routed through
+        # sebOS intent classification after transcription: reminder, note,
+        # journal/reflection, clarification, or assistant handoff. They do not
+        # blindly default to journal.
         if audio_paths:
-            saved_any = False
             for idx, path in enumerate(audio_paths):
                 inbox_path = await self._copy_audio_to_sebos_inbox(path, message_id)
                 if not inbox_path:
                     continue
                 result = await self._run_sebos_json(
-                    "sebos-photon-ingest-audio",
-                    "--space-id", space_id,
-                    "--message-id", message_id or "unknown",
+                    "sebos-route-command",
                     "--audio-path", inbox_path,
-                    "--mime-type", (media_types[idx] if idx < len(media_types) else "audio/mp4") or "audio/mp4",
-                    "--name", Path(inbox_path).name,
-                    timeout=45.0,
+                    "--write",
+                    "--db", str(_SEBOS_DB_PATH),
+                    "--json",
+                    timeout=120.0,
                 )
-                logger.info("[photon] sebOS audio ingest: %s", result)
-                saved_any = True
-            if saved_any:
-                await self._send_quiet(space_id, "Audio saved.")
+                logger.info("[photon] sebOS audio route result: %s", result)
+                intent = str(result.get("intent") or "")
+                status = str(result.get("status") or "")
+                if intent == "ask":
+                    body = str((result.get("details") or {}).get("body") or "").strip()
+                    return body or None
+                reply = str(result.get("reply") or "").strip()
+                if not reply:
+                    reply = "Handled." if status != "error" else "Could not handle that."
+                await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH])
                 return "handled"
 
         # Explicit assistant escape hatch. Deterministic sebOS actions require
