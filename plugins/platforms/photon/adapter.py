@@ -428,29 +428,12 @@ class PhotonAdapter(BasePlatformAdapter):
             return None
         stripped = (text or "").strip()
         lowered = stripped.lower()
-        if lowered.startswith("j:") or lowered.startswith("journal:"):
-            await self._send_quiet(space_id, "Saved.")
-            payload = json.dumps(
-                {"space_id": space_id, "message_id": message_id, "text": stripped},
-                sort_keys=True,
-            )
-            result = await self._run_sebos_json("sebos-photon-ingest-text", stdin=payload)
-            logger.info("[photon] sebOS journal ingest: %s", result)
-            return "handled"
-        if lowered == "board":
-            await self._send_quiet(space_id, (await self._mission_control_text())[:_MAX_MESSAGE_LENGTH])
-            return "handled"
-        if lowered == "now" or lowered == "next":
-            board = await self._mission_control_text()
-            await self._send_quiet(
-                space_id,
-                self._section_from_board(board, lowered.upper(), 1 if lowered == "now" else 3),
-            )
-            return "handled"
         audio_paths = [
             path for path, mime in zip(media_urls, media_types)
             if mtype in {MessageType.AUDIO, MessageType.VOICE} or (mime or "").lower().startswith("audio/")
         ]
+        # Audio wins before any text fallback. Voice notes are journal signal, not
+        # normal assistant chat.
         if audio_paths:
             saved_any = False
             for idx, path in enumerate(audio_paths):
@@ -471,10 +454,48 @@ class PhotonAdapter(BasePlatformAdapter):
             if saved_any:
                 await self._send_quiet(space_id, "Audio saved.")
                 return "handled"
+
+        # Explicit assistant escape hatch. Everything else gets the sebOS router
+        # first, then unknowns fall through to normal Hermes chat.
         if lowered.startswith("h:"):
             return stripped[2:].strip() or " "
         if lowered.startswith("hermes:"):
             return stripped[len("hermes:"):].strip() or " "
+        if lowered.startswith("ask:"):
+            return stripped[4:].strip() or " "
+        if lowered.startswith("chat:"):
+            return stripped[5:].strip() or " "
+
+        if lowered == "board":
+            await self._send_quiet(space_id, (await self._mission_control_text())[:_MAX_MESSAGE_LENGTH])
+            return "handled"
+        if lowered == "now" or lowered == "next":
+            board = await self._mission_control_text()
+            await self._send_quiet(
+                space_id,
+                self._section_from_board(board, lowered.upper(), 1 if lowered == "now" else 3),
+            )
+            return "handled"
+
+        if stripped:
+            result = await self._run_sebos_json(
+                "sebos-route-command",
+                "--text", "-",
+                "--write",
+                "--json",
+                stdin=stripped,
+                timeout=45.0,
+            )
+            logger.info("[photon] sebOS route result: %s", result)
+            intent = str(result.get("intent") or "")
+            status = str(result.get("status") or "")
+            if intent in {"unknown", "ignored", "ask"}:
+                return None
+            reply = str(result.get("reply") or "").strip()
+            if not reply:
+                reply = "Handled." if status != "error" else "Could not handle that."
+            await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH])
+            return "handled"
         return None
 
     async def _assert_cloud_project_safe(self) -> bool:
