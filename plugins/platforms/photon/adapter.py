@@ -16,8 +16,8 @@ Inbound:
 
 Outbound:
     ``send`` posts to the sidecar's loopback control endpoint,
-    authenticated with a shared bearer token. Typing indicators are
-    intentional no-ops for iMessage because they are noisy on shared routes.
+    authenticated with a shared bearer token. Typing indicators and selective
+    ack reactions are opt-in because iMessage is Seb's clean personal inbox.
     Outbound media (images, voice notes, video, documents) goes through
     spectrum-ts'
     ``attachment()`` / ``voice()`` content builders via the sidecar's
@@ -229,6 +229,10 @@ class PhotonAdapter(BasePlatformAdapter):
             extra.get("typing_indicators")
             or os.getenv("PHOTON_TYPING_INDICATORS", "false")
         ).strip().lower() in {"true", "1", "yes", "on"}
+        self._ack_reactions_enabled = str(
+            extra.get("ack_reactions")
+            or os.getenv("PHOTON_ACK_REACTIONS", "false")
+        ).strip().lower() in {"true", "1", "yes", "on"}
 
         # With markdown on, format_message preserves fences and the sidecar's
         # markdown() builder renders them (or degrades them readably).
@@ -436,6 +440,37 @@ class PhotonAdapter(BasePlatformAdapter):
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed
 
+    def _ack_reactions_enabled_for_sebos(self) -> bool:
+        return bool(self._ack_reactions_enabled)
+
+    async def _send_ack_reaction(
+        self,
+        chat_id: str,
+        message_id: Optional[str],
+        emoji: str,
+    ) -> bool:
+        if not self._ack_reactions_enabled_for_sebos() or not message_id:
+            return False
+        return await self._add_reaction(chat_id, message_id, emoji)
+
+    @staticmethod
+    def _sebos_ack_emoji(result: Dict[str, Any]) -> Optional[str]:
+        """Return the silent confirmation tapback for deterministic sebOS writes."""
+        if str(result.get("status") or "") != "ok" or not result.get("mutated"):
+            return None
+        intent = str(result.get("intent") or "")
+        if intent == "journal":
+            return "❤️"
+        if intent in {
+            "reminder",
+            "note",
+            "suppress",
+            "unsuppress",
+            "done_working",
+        }:
+            return "👍"
+        return None
+
     def _active_journal_prompt_date(self, message_dt: datetime) -> Optional[str]:
         if not _SEBOS_DB_PATH.exists():
             return None
@@ -525,7 +560,8 @@ class PhotonAdapter(BasePlatformAdapter):
         if int(result.get("inserted") or 0) <= 0:
             return False
         if int(result.get("transcribed_ok") or 0) > 0:
-            await self._send_quiet(space_id, "Audio journal saved.")
+            if not await self._send_ack_reaction(space_id, message_id, "❤️"):
+                await self._send_quiet(space_id, "Audio journal saved.")
         else:
             await self._send_quiet(space_id, "Audio received, but transcription failed.")
         return True
@@ -592,6 +628,11 @@ class PhotonAdapter(BasePlatformAdapter):
             if intent in {"unknown", "ignored", "ask"}:
                 return None
             reply = str(result.get("reply") or "").strip()
+            ack_emoji = self._sebos_ack_emoji(result)
+            if ack_emoji and await self._send_ack_reaction(
+                space_id, message_id, ack_emoji
+            ):
+                return "handled"
             if not reply:
                 reply = "Handled." if status != "error" else "Could not handle that."
             await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH])
