@@ -42,9 +42,40 @@ async def test_sebos_rules_unknown_falls_through_to_assistant(monkeypatch: pytes
     )
 
     assert result is None
-    assert calls[0][0][:6] == ("sebos-route-command", "--text", "-", "--write", "--db", str(adapter_module._SEBOS_DB_PATH))
-    assert calls[0][1] == "random normal chat"
+    assert calls == []
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_sebos_rules_explicit_command_routes_to_sebos(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _make_adapter(monkeypatch)
+    calls = []
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        calls.append((args, stdin, timeout))
+        return {"intent": "reminder", "status": "ok", "reply": "Reminder set."}
+
+    sent = []
+
+    async def fake_send(space_id: str, text: str) -> None:
+        sent.append((space_id, text))
+
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+
+    result = await adapter._handle_sebos_rules(
+        space_id="space-1",
+        message_id="msg-1",
+        text="remind me tomorrow at 9 to call Chaz",
+        mtype=MessageType.TEXT,
+        media_urls=[],
+        media_types=[],
+    )
+
+    assert result == "handled"
+    assert calls[0][0][:6] == ("sebos-route-command", "--text", "-", "--write", "--db", str(adapter_module._SEBOS_DB_PATH))
+    assert calls[0][1] == "remind me tomorrow at 9 to call Chaz"
+    assert sent == [("space-1", "Reminder set.")]
 
 
 @pytest.mark.asyncio

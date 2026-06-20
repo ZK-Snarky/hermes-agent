@@ -532,7 +532,6 @@ hermes mcp serve
 
 ### 可用工具
 
-MCP 服务器暴露 10 个工具，与 OpenClaw 的 channel bridge 接口一致，并额外提供一个 Hermes 专属的 channel 浏览器：
 
 | 工具 | 描述 |
 |------|-------------|

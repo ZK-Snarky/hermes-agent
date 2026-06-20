@@ -479,7 +479,6 @@ const sidebars: SidebarsConfig = {
                   key: 'skills-optional-migration',
                   collapsed: true,
                   items: [
-                    'user-guide/skills/optional/migration/migration-openclaw-migration',
                   ],
                 },
                 {
@@ -703,7 +702,6 @@ const sidebars: SidebarsConfig = {
         'guides/delegation-patterns',
         'guides/github-pr-review-agent',
         'guides/webhook-github-pr-review',
-        'guides/migrate-from-openclaw',
         'guides/aws-bedrock',
         'guides/azure-foundry',
         'guides/xai-grok-oauth',

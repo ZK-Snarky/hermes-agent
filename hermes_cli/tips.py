@@ -327,7 +327,6 @@ TIPS = [
     "GPT-5 and Codex use 'developer' role instead of 'system' in the message format.",
     "Per-task auxiliary overrides: auxiliary.vision.provider, auxiliary.compression.model, etc. in config.yaml.",
     "The auxiliary client treats 'main' as a provider alias — resolves to your actual primary provider + model.",
-    "hermes claw migrate --dry-run previews OpenClaw migration without writing anything.",
     "File paths pasted with quotes or escaped spaces are handled automatically — no manual cleanup needed.",
     "Slash commands never trigger the large-paste collapse — /command with big arguments works correctly.",
     "In interrupt mode, slash commands typed during agent execution bypass interrupt logic and run immediately.",

@@ -459,8 +459,8 @@ class PhotonAdapter(BasePlatformAdapter):
                 await self._send_quiet(space_id, "Audio saved.")
                 return "handled"
 
-        # Explicit assistant escape hatch. Everything else gets the sebOS router
-        # first, then unknowns fall through to normal Hermes chat.
+        # Explicit assistant escape hatch. Deterministic sebOS actions require
+        # explicit commands; normal iMessages stay normal Hermes chat.
         if lowered.startswith("h:"):
             return stripped[2:].strip() or " "
         if lowered.startswith("hermes:"):
@@ -481,7 +481,7 @@ class PhotonAdapter(BasePlatformAdapter):
             )
             return "handled"
 
-        if stripped:
+        if stripped and self._looks_like_sebos_command(stripped):
             result = await self._run_sebos_json(
                 "sebos-route-command",
                 "--text", "-",
@@ -502,6 +502,37 @@ class PhotonAdapter(BasePlatformAdapter):
             await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH])
             return "handled"
         return None
+
+    @staticmethod
+    def _looks_like_sebos_command(text: str) -> bool:
+        """Return True for explicit sebOS commands only.
+
+        Plain iMessages should stay conversational. This keeps iMessage clean:
+        sebOS handles deterministic actions, Hermes handles normal chat.
+        """
+        lowered = (text or "").strip().lower()
+        if not lowered:
+            return False
+        prefixes = (
+            "j:",
+            "journal:",
+            "remind me ",
+            "reminder:",
+            "note this",
+            "note:",
+            "suppress ",
+            "hide ",
+            "don't mention ",
+            "dont mention ",
+            "do not mention ",
+            "remove this",
+            "remove the ",
+            "delete reminder ",
+        )
+        if lowered.startswith(prefixes):
+            return True
+        exact = {"where was i", "where was i?", "what am i doing", "what am i doing?"}
+        return lowered in exact
 
     async def _assert_cloud_project_safe(self) -> bool:
         """Refuse Photon shared-cloud iMessage unless explicitly overridden.

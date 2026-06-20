@@ -2383,7 +2383,7 @@ DEFAULT_CONFIG = {
     # Core Hermes tools (terminal, read_file, write_file, patch,
     # search_files, todo, memory, browser_*, etc.) are NEVER deferred.
     # See tools/tool_search.py for full design notes and the
-    # openclaw-tool-search-report PDF in this PR for the rationale.
+    # tool-search report in this PR for the rationale.
     "tools": {
         "tool_search": {
             # "auto" (default) — activate only when deferrable tool schemas
@@ -4001,7 +4001,7 @@ def _normalize_custom_provider_entry(
         "baseUrl": "base_url",
         "apiMode": "api_mode",
         "keyEnv": "key_env",
-        "apiKeyEnv": "key_env",  # alias — OpenClaw-compatible + docs variant
+        "apiKeyEnv": "key_env",  # alias — legacy-compatible + docs variant
         "defaultModel": "default_model",
         "contextLength": "context_length",
         "rateLimitDelay": "rate_limit_delay",

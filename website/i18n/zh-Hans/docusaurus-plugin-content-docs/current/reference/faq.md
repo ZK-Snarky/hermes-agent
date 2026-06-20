@@ -668,7 +668,6 @@ delegation:
 
 ### 在一个 WhatsApp 号码上运行多个智能体（按聊天绑定）
 
-**场景：** 在 OpenClaw 中，您可以将多个独立智能体绑定到特定的 WhatsApp 聊天 — 一个用于家庭购物清单群组，另一个用于您的私聊。Hermes 能做到吗？
 
 **当前限制：** Hermes 的每个 profile 都需要自己的 WhatsApp 号码/会话。您无法将多个 profiles 绑定到同一个 WhatsApp 号码上的不同聊天 — WhatsApp bridge（Baileys）每个号码使用一个已认证的会话。
 

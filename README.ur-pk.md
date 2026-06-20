@@ -89,7 +89,6 @@ hermes tools        # کنفیگر کریں کہ کون سے ٹولز ایکٹو
 hermes config set   # انفرادی کنفگ (config) ویلیوز سیٹ کریں
 hermes gateway      # میسجنگ گیٹ وے شروع کریں (ٹیلی گرام، ڈسکارڈ، وغیرہ)
 hermes setup        # مکمل سیٹ اپ وزرڈ چلائیں (یہ سب کچھ ایک ساتھ کنفیگر کر دے گا)
-hermes claw migrate # OpenClaw سے مائیگریٹ کریں (اگر آپ OpenClaw سے آ رہے ہیں)
 hermes update       # لیٹسٹ ورژن پر اپ ڈیٹ کریں
 hermes doctor       # کسی بھی مسئلے کی تشخیص کریں
 ```
@@ -175,40 +174,6 @@ hermes setup --portal
 
 ---
 
-## OpenClaw سے منتقلی
-
-اگر آپ OpenClaw سے منتقل ہو رہے ہیں، تو ہرمیس آپ کی سیٹنگز، یادیں (memories)، مہارتیں (skills)، اور API کیز کو خود بخود امپورٹ کر سکتا ہے۔
-
-**پہلی بار سیٹ اپ کے دوران:** سیٹ اپ وزرڈ (`hermes setup`) خود بخود `~/.openclaw` کو پہچان لیتا ہے اور کنفیگریشن شروع ہونے سے پہلے مائیگریٹ (migrate) کرنے کا آپشن دیتا ہے۔
-
-**انسٹالیشن کے بعد کسی بھی وقت:**
-
-<div dir="ltr">
-
-```bash
-hermes claw migrate              # انٹرایکٹو مائیگریشن (مکمل پری سیٹ)
-hermes claw migrate --dry-run    # جائزہ لیں کہ کیا کیا مائیگریٹ ہوگا
-hermes claw migrate --preset user-data   # حساس معلومات (secrets) کے بغیر مائیگریٹ کریں
-hermes claw migrate --overwrite  # موجودہ متصادم فائلوں کو اوور رائٹ کریں
-```
-
-</div>
-
-جو چیزیں امپورٹ ہوتی ہیں:
-
-- **SOUL.md** — پرسونا (persona) فائل
-- **میموریز (Memories)** — MEMORY.md اور USER.md کی اندراجات
-- **مہارتیں (Skills)** — صارف کی بنائی گئی مہارتیں → `~/.hermes/skills/openclaw-imports/`
-- **کمانڈ الاؤ لسٹ (allowlist)** — منظوری کے پیٹرنز (approval patterns)
-- **میسجنگ سیٹنگز** — پلیٹ فارم کنفیگریشنز، اجازت یافتہ صارفین، ورکنگ ڈائریکٹری
-- **API کیز** — الاؤ لسٹ شدہ حساس معلومات (ٹیلی گرام، OpenRouter، OpenAI، Anthropic، ElevenLabs)
-- **TTS اثاثے** — ورک اسپیس کی آڈیو فائلیں
-- **ورک اسپیس کی ہدایات** — AGENTS.md (`--workspace-target` کے ساتھ)
-
-تمام آپشنز دیکھنے کے لیے `hermes claw migrate --help` استعمال کریں، یا انٹرایکٹو ایجنٹ کی مدد سے مائیگریٹ کرنے کے لیے `openclaw-migration` سکل کا استعمال کریں (جس میں ڈرائی رن (dry-run) پریویوز شامل ہیں)۔
-
----
-
 ## تعاون کریں (Contributing)
 
 ہم آپ کے تعاون کا خیرمقدم کرتے ہیں! ڈیویلپمنٹ سیٹ اپ، کوڈ کے انداز اور PR کے طریقہ کار کے لیے براہ کرم ہماری [Contributing گائیڈ](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) دیکھیں۔
@@ -248,7 +213,6 @@ scripts/run_tests.sh
 - 📚 [سکلز ہب (Skills Hub)](https://agentskills.io)
 - 🐛 [مسائل (Issues)](https://github.com/NousResearch/hermes-agent/issues)
 - 🔌 [computer-use-linux](https://github.com/avifenesh/computer-use-linux) — ہرمیس اور دیگر MCP ہوسٹس کے لیے لینکس (Linux) ڈیسک ٹاپ کنٹرول MCP سرور، جس میں AT-SPI ایکسیسیبلٹی ٹریز، Wayland/X11 ان پٹ، سکرین شاٹس، اور کمپوزیٹر ونڈو ٹارگیٹنگ شامل ہے۔
-- 🔌 [HermesClaw](https://github.com/AaronWong1999/hermesclaw) — کمیونٹی وی چیٹ (WeChat) برج: ہرمیس ایجنٹ اور OpenClaw کو ایک ہی وی چیٹ اکاؤنٹ پر چلائیں۔
 
 ---
 

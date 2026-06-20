@@ -41,7 +41,6 @@ So **anything you'd do via terminal — read/write/search/find/run — codex doe
 
 When you enable the runtime, Hermes queries codex's `plugin/list` RPC and writes a `[plugins."<name>@openai-curated"]` entry for every plugin you have installed. The plugins themselves are managed by codex and authorized once via codex's own UI.
 
-Examples (the ones the OpenClaw thread highlighted as "YouTube-video-worthy"):
 
 - **Linear** — find/update issues
 - **GitHub** — search code, view PRs, comment
@@ -315,7 +314,6 @@ Hermes does NOT rewrite `HOME` when spawning the codex app-server subprocess (we
 - Commands codex runs via its `shell` tool see the real user `HOME` and find `~/.gitconfig`, `~/.gh/`, `~/.aws/`, `~/.npmrc`, etc. correctly.
 - Codex's internal state stays isolated through `CODEX_HOME` (which points at `~/.codex/` by default).
 
-This matches the boundary OpenClaw arrived at after some early experimentation: isolate Codex's state, leave the user's home alone. (Cf. openclaw/openclaw#81562.)
 
 ## MCP server migration
 

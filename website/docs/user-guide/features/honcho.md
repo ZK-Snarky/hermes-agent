@@ -247,7 +247,6 @@ hermes honcho sessions        # List known Honcho session mappings
 hermes honcho map             # Map current directory to a Honcho session name
 hermes honcho enable          # Enable Honcho for the active profile
 hermes honcho disable         # Disable Honcho for the active profile
-hermes honcho migrate         # Step-by-step migration guide from openclaw-honcho
 ```
 
 ## Migrating from `hermes honcho`

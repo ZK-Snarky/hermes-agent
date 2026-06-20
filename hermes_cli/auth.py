@@ -7491,7 +7491,7 @@ def _minimax_poll_token(
     client: httpx.Client, *, portal_base_url: str, client_id: str,
     user_code: str, code_verifier: str, expired_in: int, interval_ms: Optional[int],
 ) -> Dict[str, Any]:
-    # OpenClaw treats expired_in as a unix-ms timestamp (Date.now() < expireTimeMs).
+    # Some legacy providers treat expired_in as a unix-ms timestamp (Date.now() < expireTimeMs).
     # Defensive parsing: if it's small enough to be a duration, treat as seconds.
     import time as _time
     now_ms = int(_time.time() * 1000)

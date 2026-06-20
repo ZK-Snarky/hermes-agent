@@ -440,7 +440,6 @@ Session summary requires at least one prior turn in the current Honcho session. 
 | `hermes honcho map <name>` | Map current working directory to a Honcho session name |
 | `hermes honcho identity` | Seed AI peer identity or show both peer representations |
 | `hermes honcho sync` | Create host blocks for all Hermes profiles that don't have one yet |
-| `hermes honcho migrate` | Step-by-step migration guide from OpenClaw native memory to Hermes + Honcho |
 | `hermes memory setup` | Generic memory provider picker (selecting "honcho" runs the same wizard) |
 | `hermes memory status` | Show active memory provider and config |
 | `hermes memory off` | Disable external memory provider |

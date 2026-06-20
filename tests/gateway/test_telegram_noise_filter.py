@@ -31,6 +31,13 @@ def test_non_telegram_status_is_unchanged():
     assert _prepare_gateway_status_message("local", "lifecycle", message) == message
 
 
+def test_photon_status_is_always_suppressed():
+    """iMessage should never receive ops/status/tool/compression notices."""
+    noisy = "ℹ Codex gpt-5.5 caps context at 272K, so auto-compaction was raised to 85%"
+
+    assert _prepare_gateway_status_message("photon", "lifecycle", noisy) is None
+
+
 def test_telegram_status_sanitizes_raw_provider_security_errors():
     """Provider policy/security bodies should be replaced before chat delivery."""
     raw = (
@@ -81,3 +88,16 @@ def test_telegram_final_response_keeps_normal_answers():
     answer = "Here is the clean summary you asked for."
 
     assert _sanitize_gateway_final_response(Platform.TELEGRAM, answer) == answer
+
+
+def test_photon_final_response_suppresses_internal_notices():
+    raw = (
+        "ℹ Codex gpt-5.5 caps context at 272K, so auto-compaction was raised "
+        "to 85%. Opt back out: hermes config set compression.codex_gpt55_autoraise false"
+    )
+
+    assert _sanitize_gateway_final_response("photon", raw) == "Received."
+
+
+def test_photon_final_response_keeps_normal_answers():
+    assert _sanitize_gateway_final_response("photon", "Received message.") == "Received message."

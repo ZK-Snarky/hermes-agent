@@ -215,7 +215,6 @@ hermes honcho sessions        # 列出已知的 Honcho 会话映射
 hermes honcho map             # 将当前目录映射到 Honcho 会话名称
 hermes honcho enable          # 为当前 profile 启用 Honcho
 hermes honcho disable         # 为当前 profile 禁用 Honcho
-hermes honcho migrate         # 从 openclaw-honcho 迁移的分步指南
 ```
 
 ## 从 `hermes honcho` 迁移

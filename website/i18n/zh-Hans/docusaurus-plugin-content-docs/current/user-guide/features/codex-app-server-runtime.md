@@ -37,7 +37,6 @@ Hermes 可以选择将 `openai/*` 和 `openai-codex/*` 的轮次交由 [Codex CL
 
 启用运行时时，Hermes 会查询 Codex 的 `plugin/list` RPC，并为你已安装的每个插件写入一条 `[plugins."<name>@openai-curated"]` 配置项。插件本身由 Codex 管理，并通过 Codex 自己的 UI 完成一次性授权。
 
-示例（OpenClaw 帖子中被称为"值得录制视频"的那些）：
 
 - **Linear** — 查找/更新 issue
 - **GitHub** — 搜索代码、查看 PR、评论
@@ -311,7 +310,6 @@ Hermes 在生成 Codex app-server 子进程时**不会**重写 `HOME`（我们�
 - Codex 通过其 `shell` 工具运行的命令能看到真实的用户 `HOME`，并能正确找到 `~/.gitconfig`、`~/.gh/`、`~/.aws/`、`~/.npmrc` 等。
 - Codex 的内部状态通过 `CODEX_HOME` 保持隔离（默认指向 `~/.codex/`）。
 
-这与 OpenClaw 在早期实验后得出的边界一致：隔离 Codex 的状态，保持用户主目录不变。（参见 openclaw/openclaw#81562。）
 
 ## MCP server 迁移
 

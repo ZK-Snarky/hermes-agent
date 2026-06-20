@@ -353,6 +353,12 @@ def _looks_like_gateway_provider_error(text: str) -> bool:
     return bool(_GATEWAY_PROVIDER_ERROR_SHAPE_RE.search(body))
 
 
+_PHOTON_INTERNAL_NOTICE_RE = re.compile(
+    r"(?:Codex gpt-5\.5 caps context|auto-compaction was raised|hermes config set|tool call|tool_call|function call|status_callback|context compression)",
+    re.IGNORECASE,
+)
+
+
 def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
     """Sanitize final gateway replies before sending them to high-noise chats.
 
@@ -362,7 +368,17 @@ def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
     """
     if not text:
         return text
-    if _gateway_platform_value(platform) != "telegram":
+    platform_key = _gateway_platform_value(platform)
+    if platform_key == "photon":
+        redacted = _redact_gateway_user_facing_secrets(str(text))
+        if _PHOTON_INTERNAL_NOTICE_RE.search(redacted):
+            logger.warning(
+                "suppressed internal Photon final response: %s",
+                redacted[:160],
+            )
+            return "Received."
+        return redacted
+    if platform_key != "telegram":
         return text
 
     redacted = _redact_gateway_user_facing_secrets(str(text))
@@ -376,7 +392,13 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
     text = str(message or "").strip()
     if not text:
         return None
-    if _gateway_platform_value(platform) != "telegram":
+    platform_key = _gateway_platform_value(platform)
+    if platform_key == "photon":
+        # iMessage is a clean personal inbox, not an ops console. Never push
+        # compression notices, retry chatter, tool progress, or lifecycle noise
+        # through Photon; final assistant/sebOS replies use the normal send path.
+        return None
+    if platform_key != "telegram":
         return text
 
     text = _redact_gateway_user_facing_secrets(text)

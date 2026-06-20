@@ -12,7 +12,7 @@ module:
   2. Queries codex's `plugin/list` for the openai-curated marketplace
      and writes [plugins."<name>@<marketplace>"] entries for any plugin
      the user has installed=true on their codex CLI. (This is what
-     OpenClaw calls "migrate native codex plugins" — the YouTube-video-
+     older runtimes call "migrate native codex plugins" — the YouTube-video-
      worthy bit Pash highlighted: Canva, GitHub, Calendar, Gmail
      pre-configured.)
   3. Writes a [permissions] default profile so users on this runtime
@@ -496,7 +496,7 @@ def _query_codex_plugins(
                 continue
             # Skip plugins codex itself reports as unavailable (broken
             # install, missing OAuth, removed from marketplace, etc.).
-            # Cf. openclaw/openclaw#80815 — OpenClaw learned to gate
+            # Cf. legacy-runtime issue #80815 — plugin installers learned to gate
             # migration on app readiness to avoid writing config that
             # would fail at activation time. Our migration writes to
             # codex's config.toml directly, so a broken plugin would
@@ -518,7 +518,7 @@ def _query_codex_plugins(
                 continue
             seen.add(key)
             # Carry forward whatever 'enabled' codex reports — defaults to
-            # true for installed plugins. This is the same shape OpenClaw
+            # true for installed plugins. This is the same shape legacy runtimes
             # writes when migrating native codex plugins.
             out.append({
                 "name": name,

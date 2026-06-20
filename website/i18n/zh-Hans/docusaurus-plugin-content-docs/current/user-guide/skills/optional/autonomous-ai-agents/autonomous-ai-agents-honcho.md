@@ -440,7 +440,6 @@ Honcho 在注入前对 `memory-context` 块进行净化，以防止 prompt 注�
 | `hermes honcho map <name>` | 将当前工作目录映射到 Honcho 会话名称 |
 | `hermes honcho identity` | 为 AI peer 身份播种，或显示两个 peer 的表示 |
 | `hermes honcho sync` | 为所有尚未拥有 host 块的 Hermes 配置文件创建 host 块 |
-| `hermes honcho migrate` | 从 OpenClaw 原生记忆迁移到 Hermes + Honcho 的分步指南 |
 | `hermes memory setup` | 通用记忆提供商选择器（选择 "honcho" 运行相同向导） |
 | `hermes memory status` | 显示当前活跃的记忆提供商及配置 |
 | `hermes memory off` | 禁用外部记忆提供商 |

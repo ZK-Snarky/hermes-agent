@@ -108,7 +108,6 @@ An alternative to disabling privacy mode: promote the bot to **group admin**. Ad
 
 ### Observe group chatter without auto-replying
 
-For OpenClaw/Yuanbao-style group behavior, configure Telegram so the bot can **see** ordinary group messages but only **responds** when directly triggered:
 
 ```yaml
 telegram:

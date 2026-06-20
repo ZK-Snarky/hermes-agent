@@ -74,7 +74,6 @@ hermes [global-options] <command> [subcommand/options]
 | `hermes computer-use` | 安装或检查 cua-driver 后端（macOS Computer Use）。 |
 | `hermes sessions` | 浏览、导出、修剪、重命名和删除会话。 |
 | `hermes insights` | 显示 token/费用/活动分析。 |
-| `hermes claw` | OpenClaw 迁移辅助工具。 |
 | `hermes dashboard` | 启动用于管理配置、API 密钥和会话的 Web 控制台。 |
 | `hermes profile` | 管理 profile——多个隔离的 Hermes 实例。 |
 | `hermes completion` | 打印 shell 补全脚本（bash/zsh/fish）。 |
@@ -817,7 +816,6 @@ hermes skills search react --source skills-sh
 hermes skills search https://mintlify.com/docs --source well-known
 hermes skills inspect official/security/1password
 hermes skills inspect skills-sh/vercel-labs/json-render/json-render-react
-hermes skills install official/migration/openclaw-migration
 hermes skills install skills-sh/anthropics/skills/pdf --force
 hermes skills install https://sharethis.chat/SKILL.md                     # 直接 URL（单文件 SKILL.md）
 hermes skills install https://example.com/SKILL.md --name my-skill        # frontmatter 无名称时覆盖名称
@@ -1087,13 +1085,10 @@ hermes insights [--days N] [--source platform]
 | `--days <n>` | 分析最近 `n` 天（默认：30）。 |
 | `--source <platform>` | 按来源过滤，如 `cli`、`telegram` 或 `discord`。 |
 
-## `hermes claw`
 
 ```bash
-hermes claw migrate [options]
 ```
 
-将 OpenClaw 设置迁移到 Hermes。从 `~/.openclaw`（或自定义路径）读取并写入 `~/.hermes`。自动检测旧版目录名（`~/.clawdbot`、`~/.moltbot`）和配置文件名（`clawdbot.json`、`moltbot.json`）。
 
 | 选项 | 说明 |
 |--------|-------------|
@@ -1102,7 +1097,6 @@ hermes claw migrate [options]
 | `--overwrite` | 在冲突时覆盖现有 Hermes 文件（默认：当计划有冲突时拒绝应用）。 |
 | `--migrate-secrets` | 在迁移中包含 API 密钥。即使在 `--preset full` 下也需要显式指定。 |
 | `--no-backup` | 跳过迁移前对 `~/.hermes/` 的 zip 快照（默认情况下，在应用前会将单个还原点归档写入 `~/.hermes/backups/pre-migration-*.zip`；可用 `hermes import` 恢复）。 |
-| `--source <path>` | 自定义 OpenClaw 目录（默认：`~/.openclaw`）。 |
 | `--workspace-target <path>` | 工作区说明（AGENTS.md）的目标目录。 |
 | `--skill-conflict <mode>` | 处理 skill 名称冲突：`skip`（默认）、`overwrite` 或 `rename`。 |
 | `--yes` | 跳过确认提示。 |
@@ -1115,27 +1109,19 @@ hermes claw migrate [options]
 
 **归档以供手动审查：** Cron 任务、plugin、hook/webhook、memory 后端（QMD）、skill 注册表配置、UI/身份、日志、多 agent 设置、频道绑定、IDENTITY.md、TOOLS.md、HEARTBEAT.md、BOOTSTRAP.md。
 
-**API 密钥解析**按优先级顺序检查三个来源：config 值 → `~/.openclaw/.env` → `auth-profiles.json`。所有 token 字段处理纯字符串、环境变量模板（`${VAR}`）和 SecretRef 对象。
 
-完整的 config 键映射、SecretRef 处理详情和迁移后检查清单，请参阅**[完整迁移指南](../guides/migrate-from-openclaw.md)**。
 
 ### 示例
 
 ```bash
 # 预览将迁移的内容
-hermes claw migrate --dry-run
 
 # 完整迁移（所有兼容设置，不含密钥）
-hermes claw migrate --preset full
 
 # 包含 API 密钥的完整迁移
-hermes claw migrate --preset full --migrate-secrets
 
 # 仅迁移用户数据（不含密钥），覆盖冲突
-hermes claw migrate --preset user-data --overwrite
 
-# 从自定义 OpenClaw 路径迁移
-hermes claw migrate --source /home/user/old-openclaw
 ```
 
 ## `hermes dashboard`
