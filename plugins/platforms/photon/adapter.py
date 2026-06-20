@@ -837,7 +837,10 @@ class PhotonAdapter(BasePlatformAdapter):
             "Classify one short iMessage from Seb for a tiny personal-OS router. "
             "Return JSON only. Do not chat. Do not invent missing dates. "
             "Use intent chat for questions, advice, planning, unclear notes, or anything messy. "
-            "Use intent reminder only when the message asks to be reminded and a concrete due time/date can be normalized. "
+            "Use intent reminder only when the message asks to be reminded and a concrete due time/date or location trigger can be normalized. "
+            "If Seb gives a date/day without a time, default to 09:00 local; never return 00:00 unless he says midnight, 12am, or start of day. "
+            "For vague locations, ask a clarification. For named places like Home or Office, use location_name. "
+            "Use proximity=enter unless wording says leaving/when I leave. "
             "Use intent note only when the message asks to save/write/note something. "
             "Use intent journal only when the message explicitly asks to journal/log an entry. "
             "Schema: {\"intent\":\"reminder|note|journal|board|now|chat\","
@@ -847,7 +850,12 @@ class PhotonAdapter(BasePlatformAdapter):
             "\"title\":\"\","
             "\"body\":\"\","
             "\"target\":\"\","
-            "\"due_datetime\":\"YYYY-MM-DD HH:MM or empty\"}.\n"
+            "\"due_datetime\":\"YYYY-MM-DD HH:MM or empty\","
+            "\"location_name\":\"\","
+            "\"latitude\":\"\","
+            "\"longitude\":\"\","
+            "\"radius_meters\":\"\","
+            "\"proximity\":\"enter|leave|\"}.\n"
             f"Current local time: {datetime.now().astimezone().isoformat(timespec='minutes')}\n"
             f"Message timestamp: {timestamp.astimezone().isoformat(timespec='minutes')}\n"
             f"Message: {text!r}"
@@ -875,12 +883,57 @@ class PhotonAdapter(BasePlatformAdapter):
             return None
 
     @staticmethod
+    def _intent_due_datetime(intent: Dict[str, Any], original_text: str = "") -> str:
+        due = str(intent.get("due_datetime") or "").strip()
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", due):
+            return f"{due} 09:00"
+        if re.match(r"^\d{4}-\d{2}-\d{2} 00:00$", due):
+            lowered = (original_text or "").lower()
+            explicit_midnight = any(
+                phrase in lowered
+                for phrase in ("midnight", "12am", "12:00am", "start of day")
+            )
+            explicit_time = bool(
+                re.search(r"\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b", lowered)
+                or re.search(r"\bnoon\b", lowered)
+            )
+            if not explicit_midnight and not explicit_time:
+                return f"{due[:10]} 09:00"
+        return due
+
+    @staticmethod
+    def _intent_reminder_args(intent: Dict[str, Any], original_text: str = "") -> Optional[List[str]]:
+        title = str(intent.get("title") or "").strip()
+        due = PhotonAdapter._intent_due_datetime(intent, original_text)
+        location = str(intent.get("location_name") or intent.get("location") or "").strip()
+        latitude = str(intent.get("latitude") or "").strip()
+        longitude = str(intent.get("longitude") or "").strip()
+        radius = str(intent.get("radius_meters") or intent.get("radius") or "").strip()
+        proximity = str(intent.get("proximity") or "").strip().lower()
+        if not title or (not due and not location):
+            return None
+        args = ["sebos-add-reminder", title]
+        if due:
+            args.extend(["--due", due])
+        if location:
+            args.extend(["--location", location])
+        if latitude:
+            args.extend(["--latitude", latitude])
+        if longitude:
+            args.extend(["--longitude", longitude])
+        if radius:
+            args.extend(["--radius", radius])
+        if proximity in {"enter", "leave"}:
+            args.extend(["--proximity", proximity])
+        return args
+
+    @staticmethod
     def _intent_to_sebos_text(intent: Dict[str, Any]) -> Optional[str]:
         kind = str(intent.get("intent") or "").strip().lower()
         title = str(intent.get("title") or "").strip()
         body = str(intent.get("body") or "").strip()
         target = str(intent.get("target") or "").strip()
-        due = str(intent.get("due_datetime") or "").strip()
+        due = PhotonAdapter._intent_due_datetime(intent)
         if kind == "reminder":
             if not title or not due:
                 return None
@@ -928,19 +981,48 @@ class PhotonAdapter(BasePlatformAdapter):
         if kind == "chat" or confidence < self._intent_gate_min_confidence:
             return None
         routed_text = self._intent_to_sebos_text(intent)
-        if not routed_text:
-            return None
-        result = await self._run_sebos_json(
-            "sebos-route-command",
-            "--text", "-",
-            "--write",
-            "--db", str(_SEBOS_DB_PATH),
-            "--json",
-            stdin=routed_text,
-            timeout=45.0,
-        )
-        logger.info("[photon] intent gate route result: %s", result)
+        if kind == "reminder":
+            reminder_args = self._intent_reminder_args(intent, text)
+            if not reminder_args:
+                return None
+            writer = await self._run_sebos_json(*reminder_args, timeout=45.0)
+            logger.info("[photon] intent gate reminder writer result: %s", writer)
+            if writer.get("status") == "ok":
+                reply_bits = [f"Reminder added: {writer.get('title', '').strip()}"]
+                if writer.get("due"):
+                    reply_bits.append(str(writer.get("due")))
+                if writer.get("location"):
+                    reply_bits.append(f"at {writer.get('location')}")
+                reply_text = " (" + ", ".join(reply_bits[1:]) + ")." if len(reply_bits) > 1 else "."
+                reply = reply_bits[0] + reply_text
+            else:
+                reply = f"Reminder failed: {writer.get('error') or writer.get('status')}."
+            result = {
+                "status": "ok" if writer.get("status") == "ok" else "error",
+                "intent": "reminder",
+                "mutated": writer.get("status") == "ok",
+                "reply": reply,
+                "details": {"writer": writer},
+                "side_effects": [{"kind": "reminder", "writer": writer}],
+                "error_layer": None if writer.get("status") == "ok" else "reminders",
+            }
+        else:
+            if not routed_text:
+                return None
+            result = await self._run_sebos_json(
+                "sebos-route-command",
+                "--text", "-",
+                "--write",
+                "--db", str(_SEBOS_DB_PATH),
+                "--json",
+                stdin=routed_text,
+                timeout=45.0,
+            )
+            logger.info("[photon] intent gate route result: %s", result)
         reply = str(result.get("reply") or "").strip()
+        if kind == "reminder" and reply:
+            await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH], reply_to=message_id)
+            return "handled"
         ack_emoji = self._sebos_ack_emoji(result)
         if ack_emoji and await self._send_ack_reaction(space_id, message_id, ack_emoji):
             return "handled"

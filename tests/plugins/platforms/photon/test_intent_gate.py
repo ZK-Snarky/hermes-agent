@@ -68,12 +68,11 @@ async def test_natural_reminder_high_confidence_routes_to_sebos(
         }
 
     async def fake_run(*args: str, stdin: str | None = None, timeout: float = 20.0):
-        routed.append(stdin or "")
+        routed.append(" ".join(args))
         return {
             "status": "ok",
-            "intent": "reminder",
-            "reply": "Reminder added.",
-            "mutated": True,
+            "title": "call Turner",
+            "due": "2026-06-22 09:00",
         }
 
     async def fake_ack(chat_id: str, message_id: str | None, emoji: str) -> bool:
@@ -90,8 +89,8 @@ async def test_natural_reminder_high_confidence_routes_to_sebos(
     await adapter._dispatch_inbound(_text_event("remind me Monday at 9 to call Turner"))
 
     assert captured == []
-    assert routed == ["remind me 2026-06-22 09:00 to call Turner"]
-    assert quiet == [("+155****4567", "Reminder added.", "user-msg-1")]
+    assert routed == ["sebos-add-reminder call Turner --due 2026-06-22 09:00"]
+    assert quiet == [("+155****4567", "Reminder added: call Turner (2026-06-22 09:00).", "user-msg-1")]
 
 
 @pytest.mark.asyncio
@@ -147,3 +146,45 @@ def test_intent_to_sebos_text_normalizes_note_and_journal() -> None:
     assert PhotonAdapter._intent_to_sebos_text(
         {"intent": "journal", "body": "kept the promise"}
     ) == "j: kept the promise"
+
+
+def test_intent_reminder_args_default_date_only_or_implicit_midnight_to_9am() -> None:
+    assert PhotonAdapter._intent_reminder_args(
+        {"intent": "reminder", "title": "File LLC paperwork", "due_datetime": "2026-06-22 00:00"},
+        "remind me on Monday to file LLC paperwork",
+    ) == ["sebos-add-reminder", "File LLC paperwork", "--due", "2026-06-22 09:00"]
+    assert PhotonAdapter._intent_reminder_args(
+        {"intent": "reminder", "title": "File LLC paperwork", "due_datetime": "2026-06-22"},
+        "remind me Monday to file LLC paperwork",
+    ) == ["sebos-add-reminder", "File LLC paperwork", "--due", "2026-06-22 09:00"]
+
+
+def test_intent_reminder_args_preserves_explicit_midnight_and_location() -> None:
+    assert PhotonAdapter._intent_reminder_args(
+        {
+            "intent": "reminder",
+            "title": "Bring badge",
+            "due_datetime": "2026-06-22 00:00",
+            "location_name": "Office",
+            "latitude": "40.7608",
+            "longitude": "-111.8910",
+            "radius_meters": "150",
+            "proximity": "enter",
+        },
+        "remind me at midnight when I get to the office to bring badge",
+    ) == [
+        "sebos-add-reminder",
+        "Bring badge",
+        "--due",
+        "2026-06-22 00:00",
+        "--location",
+        "Office",
+        "--latitude",
+        "40.7608",
+        "--longitude",
+        "-111.8910",
+        "--radius",
+        "150",
+        "--proximity",
+        "enter",
+    ]
