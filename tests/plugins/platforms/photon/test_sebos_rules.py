@@ -4,6 +4,7 @@ import pytest
 
 from gateway.config import PlatformConfig
 from gateway.platforms.base import MessageType
+from plugins.platforms.photon import adapter as adapter_module
 from plugins.platforms.photon.adapter import PhotonAdapter
 
 
@@ -41,7 +42,7 @@ async def test_sebos_rules_unknown_falls_through_to_assistant(monkeypatch: pytes
     )
 
     assert result is None
-    assert calls[0][0][:4] == ("sebos-route-command", "--text", "-", "--write")
+    assert calls[0][0][:6] == ("sebos-route-command", "--text", "-", "--write", "--db", str(adapter_module._SEBOS_DB_PATH))
     assert calls[0][1] == "random normal chat"
     assert sent == []
 

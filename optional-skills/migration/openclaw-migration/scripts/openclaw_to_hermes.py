@@ -2569,11 +2569,20 @@ class Migrator:
             "irc": {"extras": {"server": "IRC_SERVER", "nick": "IRC_NICK", "channels": "IRC_CHANNELS"}},
             "googlechat": {"extras": {"serviceAccountKeyPath": "GOOGLE_CHAT_SA_KEY_PATH"}},
             "imessage": {},
-            "bluebubbles": {"extras": {"server": "BLUEBUBBLES_SERVER", "password": "BLUEBUBBLES_PASSWORD"}},
             "msteams": {"token": "MSTEAMS_BOT_TOKEN", "allowFrom": "MSTEAMS_ALLOWED_USERS"},
             "nostr": {"extras": {"nsec": "NOSTR_NSEC", "relays": "NOSTR_RELAYS"}},
             "twitch": {"token": "TWITCH_BOT_TOKEN", "extras": {"channels": "TWITCH_CHANNELS"}},
         }
+
+        if channels.get("bluebubbles"):
+            self.record(
+                "deep-channels",
+                None,
+                None,
+                "skipped",
+                "BlueBubbles is no longer supported; use Photon for iMessage",
+                source_key="channels.bluebubbles",
+            )
 
         for ch_name, ch_mapping in CHANNEL_ENV_MAP.items():
             ch_cfg = channels.get(ch_name) or {}

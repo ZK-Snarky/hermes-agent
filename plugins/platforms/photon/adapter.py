@@ -15,9 +15,11 @@ Inbound:
     No webhook, no public URL, no signing secret.
 
 Outbound:
-    ``send`` / ``send_typing`` are loopback POSTs to the sidecar's control
-    endpoints, authenticated with a shared bearer token.  Outbound media
-    (images, voice notes, video, documents) goes through spectrum-ts'
+    ``send`` posts to the sidecar's loopback control endpoint,
+    authenticated with a shared bearer token. Typing indicators are
+    intentional no-ops for iMessage because they are noisy on shared routes.
+    Outbound media (images, voice notes, video, documents) goes through
+    spectrum-ts'
     ``attachment()`` / ``voice()`` content builders via the sidecar's
     ``/send-attachment`` endpoint.
 """
@@ -86,8 +88,10 @@ _DEDUP_MAX_SIZE = 4000
 _DEDUP_WINDOW_SECONDS = 48 * 3600
 
 _SIDECAR_DIR = Path(__file__).parent / "sidecar"
-_SEBOS_BIN_DIR = Path.home() / ".hermes" / "sebos" / "bin"
-_SEBOS_AUDIO_INBOX = Path.home() / ".hermes" / "sebos" / "inbox" / "audio"
+_SEBOS_ROOT = Path.home() / ".hermes" / "sebos"
+_SEBOS_BIN_DIR = _SEBOS_ROOT / "bin"
+_SEBOS_DB_PATH = _SEBOS_ROOT / "sebos.db"
+_SEBOS_AUDIO_INBOX = _SEBOS_ROOT / "inbox" / "audio"
 
 # Group-chat mention wake words. When ``require_mention`` is enabled, group
 # messages are ignored unless they match one of these patterns — same
@@ -482,6 +486,7 @@ class PhotonAdapter(BasePlatformAdapter):
                 "sebos-route-command",
                 "--text", "-",
                 "--write",
+                "--db", str(_SEBOS_DB_PATH),
                 "--json",
                 stdin=stripped,
                 timeout=45.0,
@@ -522,30 +527,37 @@ class PhotonAdapter(BasePlatformAdapter):
                     },
                 )
         except Exception as exc:
-            self._set_fatal_error(
-                "IMESSAGE_TYPE_CHECK_FAILED",
-                f"could not verify Photon iMessage project type: {exc}",
-                retryable=True,
+            logger.warning(
+                "[photon] could not verify Photon iMessage project type; "
+                "continuing because sidecar credentials may still be valid: %s",
+                exc,
             )
-            return False
+            return True
         if resp.status_code != 200:
-            self._set_fatal_error(
-                "IMESSAGE_TYPE_CHECK_FAILED",
-                f"Photon iMessage type check returned HTTP {resp.status_code}",
-                retryable=True,
+            logger.warning(
+                "[photon] Photon iMessage type check returned HTTP %s; "
+                "continuing because sidecar credentials may still be valid",
+                resp.status_code,
             )
-            return False
+            return True
         try:
             data = resp.json() or {}
         except Exception as exc:
-            self._set_fatal_error(
-                "IMESSAGE_TYPE_CHECK_FAILED",
-                f"Photon iMessage type check returned invalid JSON: {exc}",
-                retryable=True,
+            logger.warning(
+                "[photon] Photon iMessage type check returned invalid JSON; "
+                "continuing because sidecar credentials may still be valid: %s",
+                exc,
             )
-            return False
+            return True
         imessage_type = str(((data.get("data") or {}).get("type") or "")).lower()
         if imessage_type == "dedicated":
+            return True
+        if imessage_type != "shared":
+            logger.warning(
+                "[photon] Photon iMessage project type is unknown (%s); "
+                "continuing because only confirmed shared-cloud projects are blocked",
+                imessage_type or "empty",
+            )
             return True
         if imessage_type == "shared" and allow_shared:
             logger.warning(
@@ -580,13 +592,8 @@ class PhotonAdapter(BasePlatformAdapter):
                 retryable=False,
             )
             return False
-        # Do not block startup on Photon project-type probing. The Spectrum
-        # management endpoint can return 401 while the sidecar credentials still
-        # support live iMessage send/receive. Failing closed here takes the whole
-        # Photon channel offline even though the sidecar path works.
-        if str(os.getenv("PHOTON_PROJECT_TYPE_CHECK", "false")).strip().lower() in {"true", "1", "yes", "on"}:
-            if not await self._assert_cloud_project_safe():
-                return False
+        if not await self._assert_cloud_project_safe():
+            return False
 
         client = httpx.AsyncClient(timeout=30.0)
         self._http_client = client

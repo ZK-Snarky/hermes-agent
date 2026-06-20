@@ -65,6 +65,19 @@ async def test_shared_cloud_project_fails_closed(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
+async def test_connect_fails_closed_when_project_type_is_shared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _make_adapter(monkeypatch)
+    _TypeClient.response = _Resp(200, {"data": {"type": "shared"}})
+    _TypeClient.calls = []
+    monkeypatch.setattr(photon_adapter.httpx, "AsyncClient", _TypeClient)
+
+    assert await adapter.connect() is False
+    assert adapter.fatal_error_code == "SHARED_CLOUD_UNSAFE"
+
+
+@pytest.mark.asyncio
 async def test_dedicated_project_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _make_adapter(monkeypatch)
     _TypeClient.response = _Resp(200, {"data": {"type": "dedicated"}})
@@ -90,12 +103,13 @@ async def test_shared_cloud_can_only_boot_with_explicit_unsafe_override(
 
 
 @pytest.mark.asyncio
-async def test_imessage_type_check_failure_blocks_boot(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_imessage_type_check_http_failure_allows_sidecar_boot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = _make_adapter(monkeypatch)
     _TypeClient.response = _Resp(503, {"error": "unavailable"})
     _TypeClient.calls = []
     monkeypatch.setattr(photon_adapter.httpx, "AsyncClient", _TypeClient)
 
-    assert await adapter._assert_cloud_project_safe() is False
-    assert adapter.fatal_error_code == "IMESSAGE_TYPE_CHECK_FAILED"
-    assert adapter.fatal_error_retryable is True
+    assert await adapter._assert_cloud_project_safe() is True
+    assert adapter.fatal_error_code is None
