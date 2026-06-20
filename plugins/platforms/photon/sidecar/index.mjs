@@ -58,6 +58,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { once } from "node:events";
 import { patchSpectrumTs } from "./patch-spectrum-mixed-attachments.mjs";
+import { patchSpectrumCatchUpRateLimit } from "./patch-spectrum-catchup-rate-limit.mjs";
 
 const projectId = process.env.PHOTON_PROJECT_ID;
 const projectSecret = process.env.PHOTON_PROJECT_SECRET;
@@ -148,6 +149,23 @@ try {
 } catch (e) {
   console.error(
     "photon-sidecar: spectrum mixed attachment patch failed. " +
+      "Run `npm install` inside plugins/platforms/photon/sidecar/ or " +
+      "upgrade the Photon sidecar patch for the pinned spectrum-ts version. " +
+      "Original error: " +
+      (e && e.stack ? e.stack : String(e))
+  );
+  process.exit(3);
+}
+try {
+  const rateLimitPatchResult = patchSpectrumCatchUpRateLimit();
+  if (rateLimitPatchResult.patched) {
+    console.error(
+      `photon-sidecar: spectrum catch-up rate-limit patch applied: ${rateLimitPatchResult.file}`
+    );
+  }
+} catch (e) {
+  console.error(
+    "photon-sidecar: spectrum catch-up rate-limit patch failed. " +
       "Run `npm install` inside plugins/platforms/photon/sidecar/ or " +
       "upgrade the Photon sidecar patch for the pinned spectrum-ts version. " +
       "Original error: " +
