@@ -80,6 +80,51 @@ const MAX_KNOWN_SPACES = 2048;
 const MAX_KNOWN_MESSAGES = 1024;
 const MAX_REACTION_HANDLES = 512;
 
+// Apple's iMessage attachment row for a voice note carries `Audio Message.caf`
+// (or a localized variant) plus an audio MIME, but spectrum-ts' generic
+// `attachmentContent` mapper always emits `type: "attachment"` — there is no
+// automatic promotion to `type: "voice"`. Per the Spectrum content/voice docs
+// (https://photon.codes/docs/spectrum-ts/content/voice) voice and attachment
+// share the same content shape; the discriminator reflects intent. Promote here
+// so the Python adapter routes audio bytes through the voice/audio path
+// (audio cache + journal ingest) instead of the generic document cache.
+const _AUDIO_MIME_BY_EXT = {
+  ".caf": "audio/x-caf",
+  ".m4a": "audio/mp4",
+  ".mp3": "audio/mpeg",
+  ".mpga": "audio/mpeg",
+  ".aac": "audio/aac",
+  ".aiff": "audio/aiff",
+  ".aif": "audio/aiff",
+  ".amr": "audio/amr",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".opus": "audio/opus",
+  ".flac": "audio/flac",
+};
+const _AUDIO_NAME_RE = /^audio\s*message\b/i;
+
+function _extOf(name) {
+  if (typeof name !== "string") return "";
+  const idx = name.lastIndexOf(".");
+  return idx >= 0 ? name.slice(idx).toLowerCase() : "";
+}
+
+function _looksLikeAudio(name, mime) {
+  const lower = (mime || "").toLowerCase();
+  if (lower.startsWith("audio/")) return true;
+  const ext = _extOf(name);
+  if (ext && _AUDIO_MIME_BY_EXT[ext]) return true;
+  return typeof name === "string" && _AUDIO_NAME_RE.test(name);
+}
+
+function _inferAudioMime(name, mime) {
+  const lower = (mime || "").toLowerCase();
+  if (lower.startsWith("audio/")) return mime;
+  const ext = _extOf(name);
+  return _AUDIO_MIME_BY_EXT[ext] || "audio/x-caf";
+}
+
 if (!projectId || !projectSecret || !sharedToken) {
   console.error(
     "photon-sidecar: PHOTON_PROJECT_ID, PHOTON_PROJECT_SECRET and " +
@@ -232,14 +277,27 @@ async function deliver(line) {
 }
 
 async function normalizeBinaryContent(content) {
+  // Per Spectrum docs (spectrum-ts/content/voice) voice and attachment share
+  // the same content shape; spectrum-ts' iMessage inbound mapper unconditionally
+  // emits `type: "attachment"` for every iMessage attachment row, including
+  // voice notes. Promote audio-named/audio-MIME attachments to `voice` at the
+  // boundary so the Python adapter routes the bytes through the audio cache and
+  // journal ingest path instead of the generic document cache.
+  const looksAudio =
+    content.type === "voice" ||
+    (content.type === "attachment" && _looksLikeAudio(content.name, content.mimeType));
+  const inferredType = content.type === "attachment" && looksAudio ? "voice" : content.type;
+  const inferredMime = looksAudio
+    ? _inferAudioMime(content.name, content.mimeType)
+    : content.mimeType ?? null;
   const meta = {
-    type: content.type,
+    type: inferredType,
     id: content.id ?? null,
     name: content.name ?? null,
-    mimeType: content.mimeType ?? null,
+    mimeType: inferredMime,
     size: typeof content.size === "number" ? content.size : null,
   };
-  if (content.type === "voice" && typeof content.duration === "number") {
+  if (inferredType === "voice" && typeof content.duration === "number") {
     meta.duration = content.duration;
   }
 

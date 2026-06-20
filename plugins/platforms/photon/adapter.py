@@ -561,6 +561,14 @@ class PhotonAdapter(BasePlatformAdapter):
         if not prompt_date:
             return False
         if not media_urls and "\ufffc" in text:
+            # Last-resort recovery only: the docs-correct path is the sidecar
+            # promoting audio-named attachments to ``voice`` so the next event
+            # for this message arrives with ``media_urls`` already populated.
+            # If we still see a marker-only text event with no media (e.g. when
+            # Spectrum never emits a follow-up attachment event for an IMCore
+            # message that races the attachment row), fall back to scanning the
+            # local document cache by mtime \u2014 same as the prior heuristic, but
+            # demoted from the primary path.
             recovered = None
             for _ in range(12):
                 recovered = self._recent_audio_document_for_marker(timestamp)
@@ -568,19 +576,41 @@ class PhotonAdapter(BasePlatformAdapter):
                     break
                 await asyncio.sleep(0.25)
             if recovered:
-                logger.info("[photon] recovered marker-only audio attachment for sebOS journal: %s", recovered)
+                logger.info(
+                    "[photon] last-resort: recovered marker-only audio "
+                    "attachment for sebOS journal from cache mtime: %s",
+                    recovered,
+                )
                 media_urls = [recovered]
-                media_types = ["audio/caf"]
+                media_types = ["audio/x-caf"]
             else:
-                logger.warning("[photon] marker-only journal audio had no recoverable cached CAF near %s", timestamp.isoformat())
-        if not media_urls or not any((mime or "").lower().startswith("audio/") for mime in media_types):
+                logger.warning(
+                    "[photon] marker-only journal audio had no recoverable "
+                    "cached file near %s",
+                    timestamp.isoformat(),
+                )
+        if not media_urls:
+            return False
+        # Accept either an audio MIME OR an audio file extension on the cached
+        # path. iMessage voice notes commonly arrive with empty MIME and the
+        # canonical ``Audio Message.caf`` name, so an extension check is the
+        # docs-correct discriminator (see Spectrum content/voice docs).
+        is_audio = any(
+            (mime or "").lower().startswith("audio/") for mime in media_types
+        ) or any(_path_looks_like_audio(path) for path in media_urls)
+        if not is_audio:
             return False
 
         audio_path = media_urls[0]
         retained_path = await self._copy_audio_to_sebos_inbox(audio_path, message_id)
         if retained_path:
             audio_path = retained_path
-        mime = media_types[0] if media_types else "audio/caf"
+        mime = media_types[0] if media_types else ""
+        if not mime.lower().startswith("audio/"):
+            # Upstream MIME was generic (e.g. application/octet-stream on a
+            # ``Audio Message.caf``); pick from the file extension instead so
+            # sebOS sees a coherent audio MIME.
+            mime = _AUDIO_MIME_BY_EXT.get(Path(audio_path).suffix.lower(), "audio/x-caf")
         payload = {
             "messages": [
                 {
@@ -1012,19 +1042,41 @@ class PhotonAdapter(BasePlatformAdapter):
         def _normalize_binary_payload(
             payload: Dict[str, Any]
         ) -> tuple[str, MessageType, List[str], List[str]]:
-            is_voice = payload.get("type") == "voice"
-            name = payload.get("name") or ("voice" if is_voice else "(unnamed)")
+            # Audio-named attachments without a real MIME (e.g. iMessage's
+            # ``Audio Message.caf`` with empty ``mimeType``) are voice notes per
+            # the Spectrum content/voice docs (voice and attachment share the
+            # same shape). Treat them as audio so the journal ingest gate
+            # accepts them and the bytes land in the audio cache, not the
+            # generic document cache.
+            raw_type = payload.get("type")
+            name = payload.get("name") or ("voice" if raw_type == "voice" else "(unnamed)")
             mime = payload.get("mimeType") or ""
+            is_audio_named = Path(name).suffix.lower() in _AUDIO_EXTENSIONS
+            is_voice = raw_type == "voice" or (
+                raw_type == "attachment"
+                and (mime.lower().startswith("audio/") or is_audio_named)
+            )
             mtype = MessageType.VOICE if is_voice else _attachment_message_type(mime)
             cached = _cache_inbound_attachment(
                 payload, name, mime, force_audio=is_voice
             )
             if cached:
+                if is_voice:
+                    # Infer audio MIME from the cached file extension when the
+                    # upstream Spectrum event left ``mimeType`` empty. iMessage
+                    # voice notes commonly arrive that way as
+                    # ``Audio Message.caf``; ``audio/x-caf`` keeps the journal
+                    # ingest MIME coherent with the cached file.
+                    fallback_mime = _AUDIO_MIME_BY_EXT.get(
+                        Path(cached).suffix.lower(), "audio/x-caf"
+                    )
+                else:
+                    fallback_mime = "application/octet-stream"
                 return (
                     "(voice)" if is_voice else "(attachment)",
                     mtype,
                     [cached],
-                    [mime or ("audio/mp4" if is_voice else "application/octet-stream")],
+                    [mime or fallback_mime],
                 )
             label = "voice" if is_voice else "attachment"
             duration = payload.get("duration")
@@ -1134,6 +1186,36 @@ class PhotonAdapter(BasePlatformAdapter):
                 )
                 return
             text = self._clean_mention_text(text)
+
+        # Suppress marker-only text events that arrive with no media. Per the
+        # spectrum-ts iMessage inbound mapper, when an IMCore event raises before
+        # the attachment row is linked, the message surfaces as text "￼"
+        # with empty attachments. A follow-up event (or our last-resort cache
+        # recovery in `_try_ingest_audio_journal_reply`) carries the real bytes.
+        # Routing the marker through the agent chat path would make the bot
+        # answer the placeholder glyph itself.
+        stripped = (text or "").strip("￼ \t\r\n")
+        if (
+            ctype in {"text", "group"}
+            and not media_urls
+            and "￼" in (text or "")
+            and not stripped
+        ):
+            if await self._try_ingest_audio_journal_reply(
+                space_id=space_id,
+                sender_id=sender_id,
+                message_id=event.get("messageId"),
+                text=text,
+                timestamp=timestamp,
+                media_urls=media_urls,
+                media_types=media_types,
+            ):
+                return
+            logger.info(
+                "[photon] suppressing marker-only text event "
+                "(no attachment payload, no journal recovery)"
+            )
+            return
 
         if await self._try_ingest_audio_journal_reply(
             space_id=space_id,
@@ -1919,10 +2001,44 @@ _AUDIO_EXT_BY_MIME = {
     "audio/mpeg": ".mp3",
     "audio/ogg": ".ogg",
     "audio/wav": ".wav",
-    "audio/x-caf": ".mp3",
+    "audio/x-caf": ".caf",
     "audio/mp4": ".m4a",
     "audio/aac": ".m4a",
+    "audio/amr": ".amr",
+    "audio/aiff": ".aiff",
+    "audio/opus": ".opus",
+    "audio/flac": ".flac",
 }
+
+# Extension → audio MIME, used as a fallback when the inbound Spectrum event
+# carries an audio file (e.g. ``Audio Message.caf``) but the MIME field is empty
+# or generic. Keeps sebOS ingest's MIME coherent with the cached file.
+_AUDIO_MIME_BY_EXT = {
+    ".caf": "audio/x-caf",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".mpga": "audio/mpeg",
+    ".aac": "audio/aac",
+    ".aiff": "audio/aiff",
+    ".aif": "audio/aiff",
+    ".amr": "audio/amr",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/opus",
+    ".flac": "audio/flac",
+}
+
+# File extensions Hermes treats as audio for the journal ingest gate even when
+# the upstream MIME is missing or generic. iMessage voice notes commonly arrive
+# as ``Audio Message.caf`` with no MIME populated on the Spectrum event.
+_AUDIO_EXTENSIONS = frozenset(_AUDIO_MIME_BY_EXT.keys())
+
+
+def _path_looks_like_audio(path: Optional[str]) -> bool:
+    """Return True when ``path`` carries an audio extension Hermes recognizes."""
+    if not path:
+        return False
+    return Path(path).suffix.lower() in _AUDIO_EXTENSIONS
 
 
 def _cache_inbound_attachment(

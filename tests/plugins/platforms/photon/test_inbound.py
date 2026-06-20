@@ -311,6 +311,122 @@ async def test_dispatch_attachment_downloads_document(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_attachment_with_audio_extension_routes_as_voice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Audio Message.caf`` arrives as ``type: "attachment"`` with empty MIME
+    when the sidecar promotion path is bypassed. The adapter must still
+    recognize the audio extension, route bytes through the audio cache, and
+    surface an audio MIME on the event — otherwise the journal ingest gate
+    rejects the message and the bot ends up replying to the marker glyph.
+    """
+    adapter = _make_adapter(monkeypatch)
+    captured = _capture(adapter, monkeypatch)
+
+    raw = b"caf\x00audio-message-bytes"
+    event = _attachment_event(
+        {
+            "name": "Audio Message.caf",
+            "mimeType": "",
+            "size": len(raw),
+            "data": base64.b64encode(raw).decode("ascii"),
+            "encoding": "base64",
+        },
+        msg_id="spc-msg-imessage-voice",
+    )
+    await adapter._dispatch_inbound(event)
+
+    assert len(captured) == 1
+    ev = captured[0]
+    assert ev.message_type == MessageType.VOICE
+    assert ev.media_types and ev.media_types[0].startswith("audio/")
+    assert len(ev.media_urls) == 1
+    cached = Path(ev.media_urls[0])
+    try:
+        assert cached.is_file()
+        assert cached.read_bytes() == raw
+        assert cached.suffix.lower() in {".caf", ".m4a"}
+        assert ev.text == "(voice)"
+    finally:
+        cached.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_marker_only_text_is_suppressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """spectrum-ts emits a text-only ``\\ufffc`` (Object Replacement Character)
+    event when an IMCore event raises before its attachment row is linked.
+    Routing it through the agent chat path would make the bot answer the
+    placeholder glyph. The follow-up attachment event carries the real bytes,
+    so suppress the marker entirely when no media is present.
+    """
+    adapter = _make_adapter(monkeypatch)
+    captured = _capture(adapter, monkeypatch)
+
+    await adapter._dispatch_inbound(_dm_event("￼", msg_id="spc-msg-marker"))
+    await adapter._dispatch_inbound(_dm_event("  ￼  ", msg_id="spc-msg-marker-ws"))
+
+    assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_marker_with_extra_text_is_not_suppressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only ORC-only markers are suppressed — a real caption mixed with the
+    placeholder glyph should still reach the agent (the last-resort cache poll
+    inside the journal path can still try to attach the missing media)."""
+    adapter = _make_adapter(monkeypatch)
+    captured = _capture(adapter, monkeypatch)
+
+    await adapter._dispatch_inbound(
+        _dm_event("look at this ￼ lol", msg_id="spc-msg-mixed-text")
+    )
+
+    assert len(captured) == 1
+    assert "look at this" in captured[0].text
+
+
+def test_recent_audio_document_for_marker_is_last_resort(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The marker cache-poll must:
+       1. Pick a CAF in ``cache/documents`` whose mtime is within the window.
+       2. Return ``None`` when no candidate matches.
+    Keeps the last-resort fallback honest now that the docs-correct primary
+    path (sidecar voice promotion + audio-extension acceptance) carries the
+    happy case.
+    """
+    from datetime import datetime, timezone
+
+    import plugins.platforms.photon.adapter as adapter_mod
+
+    cache_dir = tmp_path / "documents"
+    cache_dir.mkdir()
+    monkeypatch.setattr(adapter_mod, "_DOCUMENT_CACHE_DIR", cache_dir)
+
+    ts = datetime(2026, 5, 14, 19, 6, 32, tzinfo=timezone.utc)
+    # No candidates yet.
+    assert adapter_mod.PhotonAdapter._recent_audio_document_for_marker(ts) is None
+
+    # CAF whose mtime sits within ±180s of the marker — should be recovered.
+    caf_path = cache_dir / "doc_recent_Audio Message.caf"
+    caf_path.write_bytes(b"caf-payload")
+    import os
+    import time
+
+    target = ts.timestamp()
+    # Stay close to "now" so the 15-minute recency guard passes.
+    now = time.time()
+    os.utime(caf_path, (now, now))
+    # Move the marker timestamp to ~30s before now so it's within the window.
+    near = datetime.fromtimestamp(now - 30, tz=timezone.utc)
+    recovered = adapter_mod.PhotonAdapter._recent_audio_document_for_marker(near)
+    assert recovered == str(caf_path)
+
+
+@pytest.mark.asyncio
 async def test_on_inbound_line_dispatches_and_dedups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
