@@ -1020,11 +1020,11 @@ class PhotonAdapter(BasePlatformAdapter):
             )
             logger.info("[photon] intent gate route result: %s", result)
         reply = str(result.get("reply") or "").strip()
-        if kind == "reminder" and reply:
-            await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH], reply_to=message_id)
-            return "handled"
         ack_emoji = self._sebos_ack_emoji(result)
         if ack_emoji and await self._send_ack_reaction(space_id, message_id, ack_emoji):
+            return "handled"
+        if kind == "reminder" and reply:
+            await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH], reply_to=message_id)
             return "handled"
         if not reply:
             status = str(result.get("status") or "")

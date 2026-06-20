@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from gateway.config import PlatformConfig
@@ -173,3 +175,85 @@ async def test_sebos_rules_audio_falls_through_to_hermes(monkeypatch: pytest.Mon
     )
 
     assert result is None
+
+
+
+def test_intent_due_datetime_defaults_date_only_and_midnight_to_9am() -> None:
+    assert (
+        PhotonAdapter._intent_due_datetime(
+            {"due_datetime": "2026-06-22"},
+            "remind me on monday to file LLC paperwork",
+        )
+        == "2026-06-22 09:00"
+    )
+    assert (
+        PhotonAdapter._intent_due_datetime(
+            {"due_datetime": "2026-06-22 00:00"},
+            "remind me monday to file LLC paperwork",
+        )
+        == "2026-06-22 09:00"
+    )
+    assert (
+        PhotonAdapter._intent_due_datetime(
+            {"due_datetime": "2026-06-22 00:00"},
+            "remind me monday at midnight to file LLC paperwork",
+        )
+        == "2026-06-22 00:00"
+    )
+
+
+@pytest.mark.asyncio
+async def test_intent_gate_reminder_uses_9am_due_and_prefers_thumb_ack(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _make_adapter(
+        monkeypatch,
+        {"sebos_rules": True, "intent_gate": True, "ack_reactions": True},
+    )
+
+    async def fake_classify(text: str, *, timestamp: datetime):
+        return {
+            "intent": "reminder",
+            "confidence": 0.99,
+            "needs_clarification": False,
+            "title": "File LLC paperwork",
+            "due_datetime": "2026-06-22 00:00",
+        }
+
+    calls = []
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        calls.append((args, stdin, timeout))
+        return {"status": "ok", "title": "File LLC paperwork", "due": "2026-06-22 09:00"}
+
+    sent = []
+    acks = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    async def fake_ack(space_id: str, message_id: str | None, emoji: str) -> bool:
+        acks.append((space_id, message_id, emoji))
+        return True
+
+    monkeypatch.setattr(adapter, "_classify_natural_intent", fake_classify)
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+    monkeypatch.setattr(adapter, "_send_ack_reaction", fake_ack)
+
+    result = await adapter._try_intent_gate(
+        space_id="space-1",
+        message_id="msg-1",
+        text="remind me on monday to file LLC paperwork",
+        mtype=MessageType.TEXT,
+        timestamp=datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert result == "handled"
+    assert calls == [
+        (
+            ("sebos-add-reminder", "File LLC paperwork", "--due", "2026-06-22 09:00"),
+            None,
+            45.0,
+        )
+    ]
+    assert acks == [("space-1", "msg-1", "👍")]
+    assert sent == []

@@ -9360,10 +9360,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         
         # One-time prompt if no home channel is set for this platform
         # Skip for webhooks - they deliver directly to configured targets (github_comment, etc.)
+        # Skip Photon/iMessage: it is Seb's clean personal inbox, and Photon
+        # should not be asked to become a cron/cross-platform home channel.
         if not history and source.platform and source.platform != Platform.LOCAL and source.platform != Platform.WEBHOOK:
             platform_name = source.platform.value
-            env_key = _home_target_env_var(platform_name)
-            if not os.getenv(env_key):
+            if platform_name == "photon":
+                env_key = None
+            else:
+                env_key = _home_target_env_var(platform_name)
+            if env_key and not os.getenv(env_key):
                 # Slack dispatches all Hermes commands through a single
                 # parent slash command `/hermes`; bare `/sethome` is not
                 # registered and would fail with "app did not respond".
