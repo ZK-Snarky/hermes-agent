@@ -257,3 +257,101 @@ async def test_intent_gate_reminder_uses_9am_due_and_prefers_thumb_ack(monkeypat
     ]
     assert acks == [("space-1", "msg-1", "👍")]
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_intent_gate_reminder_tapback_failure_falls_back_to_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _make_adapter(
+        monkeypatch,
+        {"sebos_rules": True, "intent_gate": True, "ack_reactions": True},
+    )
+
+    async def fake_classify(text: str, *, timestamp: datetime):
+        return {
+            "intent": "reminder",
+            "confidence": 0.99,
+            "needs_clarification": False,
+            "title": "File LLC paperwork",
+            "due_datetime": "2026-06-22 09:00",
+        }
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        return {"status": "ok", "title": "File LLC paperwork", "due": "2026-06-22 09:00"}
+
+    sent = []
+    acks = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    async def fake_ack(space_id: str, message_id: str | None, emoji: str) -> bool:
+        acks.append((space_id, message_id, emoji))
+        return False
+
+    monkeypatch.setattr(adapter, "_classify_natural_intent", fake_classify)
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+    monkeypatch.setattr(adapter, "_send_ack_reaction", fake_ack)
+
+    result = await adapter._try_intent_gate(
+        space_id="space-1",
+        message_id="msg-1",
+        text="remind me monday to file LLC paperwork",
+        mtype=MessageType.TEXT,
+        timestamp=datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert result == "handled"
+    assert acks == [("space-1", "msg-1", "👍")]
+    assert sent == [("space-1", "Reminder added: File LLC paperwork (2026-06-22 09:00).", "msg-1")]
+
+
+@pytest.mark.asyncio
+async def test_intent_gate_reminder_writer_failure_does_not_success_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _make_adapter(
+        monkeypatch,
+        {"sebos_rules": True, "intent_gate": True, "ack_reactions": True},
+    )
+
+    async def fake_classify(text: str, *, timestamp: datetime):
+        return {
+            "intent": "reminder",
+            "confidence": 0.99,
+            "needs_clarification": False,
+            "title": "File LLC paperwork",
+            "due_datetime": "2026-06-22 09:00",
+        }
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        return {"status": "error", "error": "calendar unavailable"}
+
+    sent = []
+    acks = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    async def fake_ack(space_id: str, message_id: str | None, emoji: str) -> bool:
+        acks.append((space_id, message_id, emoji))
+        return True
+
+    monkeypatch.setattr(adapter, "_classify_natural_intent", fake_classify)
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+    monkeypatch.setattr(adapter, "_send_ack_reaction", fake_ack)
+
+    result = await adapter._try_intent_gate(
+        space_id="space-1",
+        message_id="msg-1",
+        text="remind me monday to file LLC paperwork",
+        mtype=MessageType.TEXT,
+        timestamp=datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert result == "handled"
+    assert acks == []
+    assert sent == [("space-1", "Reminder failed: calendar unavailable.", "msg-1")]

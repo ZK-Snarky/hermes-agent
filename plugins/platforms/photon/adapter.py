@@ -827,12 +827,137 @@ class PhotonAdapter(BasePlatformAdapter):
             )
         )
 
+    @staticmethod
+    def _deterministic_natural_reminder_intent(
+        text: str,
+        *,
+        timestamp: datetime,
+    ) -> Optional[Dict[str, Any]]:
+        """Parse stable reminder phrasings without an LLM or side effects.
+
+        This intentionally covers only high-signal shapes that should never
+        depend on model interpretation. Anything outside this small matrix falls
+        back to the intent LLM (or Hermes) rather than creating a bad reminder.
+        """
+        raw = (text or "").strip()
+        lowered = raw.lower()
+        if not lowered or not re.search(r"\bremind(?:er)?\b|\bremember to\b", lowered):
+            return None
+
+        def _title(default: str = "Reminder") -> str:
+            match = re.search(r"\bto\s+(.+?)\s*$", raw, flags=re.IGNORECASE)
+            if not match:
+                return default
+            candidate = match.group(1).strip(" .")
+            # In location-only phrases, the trailing "to the office" is the
+            # trigger, not the task title.
+            if candidate.lower() in {"office", "the office", "home"}:
+                return default
+            return candidate[:120] or default
+
+        def _intent(**fields: Any) -> Dict[str, Any]:
+            base: Dict[str, Any] = {
+                "intent": "reminder",
+                "confidence": 0.99,
+                "needs_clarification": False,
+                "clarification": "",
+                "title": _title(),
+                "due_datetime": "",
+                "location_name": "",
+                "latitude": "",
+                "longitude": "",
+                "radius_meters": "",
+                "proximity": "",
+            }
+            base.update(fields)
+            return base
+
+        def _clarify(message: str) -> Dict[str, Any]:
+            return _intent(
+                confidence=0.99,
+                needs_clarification=True,
+                clarification=message,
+            )
+
+        if re.search(r"\bafter\s+my\s+meeting\b", lowered):
+            return _clarify("When should I remind you after your meeting?")
+
+        loc_match = re.search(
+            r"\bwhen\s+i\s+(?P<verb>get\s+to|arrive\s+at|reach|leave)\s+(?P<place>.+?)\s*$",
+            lowered,
+        )
+        if loc_match:
+            place = loc_match.group("place").strip(" .")
+            verb = loc_match.group("verb")
+            normalized_place = place.removeprefix("the ").strip()
+            if normalized_place == "office":
+                return _intent(
+                    location_name="Office",
+                    proximity="leave" if verb == "leave" else "enter",
+                )
+            if normalized_place == "home":
+                return _intent(
+                    location_name="Home",
+                    proximity="leave" if verb == "leave" else "enter",
+                )
+            return _clarify(f"Which location do you mean by {place!r}?")
+
+        base = timestamp.astimezone()
+        weekdays = {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6,
+        }
+
+        def _next_weekday(target: int, *, ordinal: int = 1) -> datetime:
+            days = (target - base.weekday()) % 7
+            if days == 0:
+                days = 7
+            days += 7 * max(0, ordinal - 1)
+            return base + timedelta(days=days)
+
+        def _due(day: datetime, hour: int = 9, minute: int = 0) -> str:
+            return day.replace(hour=hour, minute=minute, second=0, microsecond=0).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+
+        if re.search(r"\btomorrow\s+morning\b", lowered):
+            return _intent(due_datetime=_due(base + timedelta(days=1), 9))
+
+        match = re.search(r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", lowered)
+        if match:
+            hour = 14 if re.search(r"\bafternoon\b", lowered) else 9
+            return _intent(due_datetime=_due(_next_weekday(weekdays[match.group(1)]), hour))
+
+        match = re.search(r"\bin\s+(\d+)\s+(mondays|tuesdays|wednesdays|thursdays|fridays|saturdays|sundays)\b", lowered)
+        if match:
+            ordinal = max(1, int(match.group(1)))
+            weekday = match.group(2).removesuffix("s")
+            return _intent(due_datetime=_due(_next_weekday(weekdays[weekday], ordinal=ordinal), 9))
+
+        match = re.search(r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", lowered)
+        if match:
+            return _intent(due_datetime=_due(_next_weekday(weekdays[match.group(1)]), 9))
+
+        return None
+
     async def _classify_natural_intent(
         self,
         text: str,
         *,
         timestamp: datetime,
     ) -> Optional[Dict[str, Any]]:
+        deterministic = self._deterministic_natural_reminder_intent(
+            text,
+            timestamp=timestamp,
+        )
+        if deterministic is not None:
+            return deterministic
+
         prompt = (
             "Classify one short iMessage from Seb for a tiny personal-OS router. "
             "Return JSON only. Do not chat. Do not invent missing dates. "

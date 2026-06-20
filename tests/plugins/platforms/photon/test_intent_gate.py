@@ -1,6 +1,7 @@
 """Natural-language intent gate tests for PhotonAdapter."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 import pytest
@@ -188,3 +189,61 @@ def test_intent_reminder_args_preserves_explicit_midnight_and_location() -> None
         "--proximity",
         "enter",
     ]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("remind me Monday", {"due_datetime": "2026-06-22 09:00"}),
+        ("remind me next Thursday afternoon", {"due_datetime": "2026-06-25 14:00"}),
+        ("remind me in 2 Fridays", {"due_datetime": "2026-07-03 09:00"}),
+        ("remind me tomorrow morning", {"due_datetime": "2026-06-21 09:00"}),
+        (
+            "remind me when I get to the office",
+            {"location_name": "Office", "proximity": "enter"},
+        ),
+        (
+            "remind me when I leave the office",
+            {"location_name": "Office", "proximity": "leave"},
+        ),
+    ],
+)
+def test_deterministic_natural_reminder_matrix_supported(
+    text: str,
+    expected: Dict[str, str],
+) -> None:
+    parsed = PhotonAdapter._deterministic_natural_reminder_intent(
+        text,
+        timestamp=datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert parsed is not None
+    assert parsed["intent"] == "reminder"
+    assert parsed["needs_clarification"] is False
+    assert parsed["title"] == "Reminder"
+    for key, value in expected.items():
+        assert parsed[key] == value
+    if parsed.get("due_datetime"):
+        assert not parsed["due_datetime"].endswith("00:00")
+
+
+@pytest.mark.parametrize(
+    ("text", "clarifier_fragment"),
+    [
+        ("remind me after my meeting", "after your meeting"),
+        ("remind me when I get to the shop", "Which location"),
+    ],
+)
+def test_deterministic_natural_reminder_matrix_clarifies_unsupported(
+    text: str,
+    clarifier_fragment: str,
+) -> None:
+    parsed = PhotonAdapter._deterministic_natural_reminder_intent(
+        text,
+        timestamp=datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert parsed is not None
+    assert parsed["intent"] == "reminder"
+    assert parsed["needs_clarification"] is True
+    assert clarifier_fragment in parsed["clarification"]
