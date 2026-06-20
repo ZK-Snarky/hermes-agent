@@ -36,9 +36,11 @@ import shutil
 import signal
 import subprocess
 import sys
+import sqlite3
+import tempfile
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -421,6 +423,112 @@ class PhotonAdapter(BasePlatformAdapter):
         except Exception as exc:
             logger.warning("[photon] failed to copy audio into sebOS inbox: %s", exc)
             return None
+
+    @staticmethod
+    def _parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    def _active_journal_prompt_date(self, message_dt: datetime) -> Optional[str]:
+        if not _SEBOS_DB_PATH.exists():
+            return None
+        try:
+            with sqlite3.connect(_SEBOS_DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT date, created_at, delivered_at
+                    FROM journal_prompts
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                    """
+                ).fetchall()
+        except sqlite3.Error as exc:
+            logger.warning("[photon] could not inspect sebOS journal prompts: %s", exc)
+            return None
+        for row in rows:
+            start = self._parse_iso_dt(row["delivered_at"] or row["created_at"])
+            if start is None:
+                continue
+            if timedelta(0) <= message_dt - start <= timedelta(hours=6):
+                return str(row["date"])
+        return None
+
+    async def _try_ingest_audio_journal_reply(
+        self,
+        *,
+        space_id: str,
+        sender_id: str,
+        message_id: Optional[str],
+        text: str,
+        timestamp: datetime,
+        media_urls: List[str],
+        media_types: List[str],
+    ) -> bool:
+        if not media_urls or not any((mime or "").lower().startswith("audio/") for mime in media_types):
+            return False
+        prompt_date = self._active_journal_prompt_date(timestamp)
+        if not prompt_date:
+            return False
+
+        audio_path = media_urls[0]
+        retained_path = await self._copy_audio_to_sebos_inbox(audio_path, message_id)
+        if retained_path:
+            audio_path = retained_path
+        mime = media_types[0] if media_types else "audio/caf"
+        payload = {
+            "messages": [
+                {
+                    "guid": message_id,
+                    "id": message_id,
+                    "text": text,
+                    "dateCreated": timestamp.isoformat(),
+                    "sender": sender_id,
+                    "handleAddress": sender_id,
+                    "chatGuid": space_id,
+                    "attachments": [
+                        {
+                            "guid": message_id,
+                            "path": audio_path,
+                            "mimeType": mime,
+                            "transferName": Path(audio_path).name,
+                        }
+                    ],
+                }
+            ]
+        }
+        _SEBOS_AUDIO_INBOX.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix="photon-audio-journal-", suffix=".json", dir=str(_SEBOS_AUDIO_INBOX))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            result = await self._run_sebos_json(
+                "sebos-ingest-journal",
+                tmp_name,
+                "--source", "photon",
+                "--sender", sender_id,
+                timeout=360.0,
+            )
+        finally:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        logger.info("[photon] sebOS audio journal ingest result: %s", result)
+        if int(result.get("inserted") or 0) <= 0:
+            return False
+        if int(result.get("transcribed_ok") or 0) > 0:
+            await self._send_quiet(space_id, "Audio journal saved.")
+        else:
+            await self._send_quiet(space_id, "Audio received, but transcription failed.")
+        return True
 
     async def _handle_sebos_rules(
         self,
@@ -919,6 +1027,17 @@ class PhotonAdapter(BasePlatformAdapter):
                 )
                 return
             text = self._clean_mention_text(text)
+
+        if await self._try_ingest_audio_journal_reply(
+            space_id=space_id,
+            sender_id=sender_id,
+            message_id=event.get("messageId"),
+            text=text,
+            timestamp=timestamp,
+            media_urls=media_urls,
+            media_types=media_types,
+        ):
+            return
 
         rule_result = await self._handle_sebos_rules(
             space_id=space_id,
