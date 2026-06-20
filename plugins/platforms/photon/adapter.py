@@ -94,6 +94,7 @@ _SEBOS_ROOT = Path.home() / ".hermes" / "sebos"
 _SEBOS_BIN_DIR = _SEBOS_ROOT / "bin"
 _SEBOS_DB_PATH = _SEBOS_ROOT / "sebos.db"
 _SEBOS_AUDIO_INBOX = _SEBOS_ROOT / "inbox" / "audio"
+_DOCUMENT_CACHE_DIR = Path.home() / ".hermes" / "cache" / "documents"
 
 # Group-chat mention wake words. When ``require_mention`` is enabled, group
 # messages are ignored unless they match one of these patterns — same
@@ -496,6 +497,38 @@ class PhotonAdapter(BasePlatformAdapter):
                 return str(row["date"])
         return None
 
+    @staticmethod
+    def _recent_audio_document_for_marker(message_dt: datetime) -> Optional[str]:
+        """Return a recent cached iMessage audio file for text-only U+FFFC events.
+
+        Spectrum can surface an iMessage voice note as a text event containing
+        only the object-replacement marker while another gateway layer has
+        already cached the CAF file under cache/documents. In that shape the
+        normalized Photon event has no attachment payload, so recover the audio
+        file by timestamp before the normal agent chat path sees a blank marker.
+        """
+        if not _DOCUMENT_CACHE_DIR.exists():
+            return None
+        exts = {".caf", ".m4a", ".mp3", ".aac", ".mp4", ".wav"}
+        candidates: list[tuple[float, Path]] = []
+        msg_ts = message_dt.timestamp()
+        now = time.time()
+        for path in _DOCUMENT_CACHE_DIR.iterdir():
+            if not path.is_file() or path.suffix.lower() not in exts:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            # Trust only files created near the inbound marker and recently.
+            delta = abs(stat.st_mtime - msg_ts)
+            if delta <= 180 and now - stat.st_mtime <= 900:
+                candidates.append((delta, path))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0])
+        return str(candidates[0][1])
+
     async def _try_ingest_audio_journal_reply(
         self,
         *,
@@ -507,6 +540,12 @@ class PhotonAdapter(BasePlatformAdapter):
         media_urls: List[str],
         media_types: List[str],
     ) -> bool:
+        if not media_urls and "\ufffc" in text:
+            recovered = self._recent_audio_document_for_marker(timestamp)
+            if recovered:
+                logger.info("[photon] recovered marker-only audio attachment for sebOS journal: %s", recovered)
+                media_urls = [recovered]
+                media_types = ["audio/caf"]
         if not media_urls or not any((mime or "").lower().startswith("audio/") for mime in media_types):
             return False
         prompt_date = self._active_journal_prompt_date(timestamp)
