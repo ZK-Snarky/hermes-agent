@@ -381,7 +381,12 @@ class PhotonAdapter(BasePlatformAdapter):
         return data
 
     async def _send_quiet(self, chat_id: str, text: str) -> None:
-        result = await self.send(chat_id, text)
+        result = await self._send_with_retry(
+            chat_id,
+            text,
+            max_retries=3,
+            base_delay=2.0,
+        )
         if not result.success:
             logger.warning("[photon] sebOS rule reply failed: %s", result.error)
 
@@ -462,7 +467,18 @@ class PhotonAdapter(BasePlatformAdapter):
     ) -> bool:
         if not self._ack_reactions_enabled_for_sebos() or not message_id:
             return False
-        return await self._add_reaction(chat_id, message_id, emoji)
+        for attempt in range(1, 5):
+            if await self._add_reaction(chat_id, message_id, emoji):
+                return True
+            if attempt < 4:
+                delay = 1.5 * attempt
+                logger.warning(
+                    "[photon] ack reaction failed (attempt %d/4), retrying in %.1fs",
+                    attempt,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        return False
 
     @staticmethod
     def _sebos_ack_emoji(result: Dict[str, Any]) -> Optional[str]:
@@ -2032,8 +2048,30 @@ class PhotonAdapter(BasePlatformAdapter):
         # _http_client directly — it always runs on the gateway's loop.
         url = f"http://{self._sidecar_bind}:{self._sidecar_port}{path}"
         headers = {"X-Hermes-Sidecar-Token": self._sidecar_token}
+        resp: Any = None
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=body, headers=headers)
+            for attempt in range(1, 4):
+                resp = await client.post(url, json=body, headers=headers)
+                if resp.status_code == 200:
+                    break
+                text = resp.text[:200]
+                retryable = resp.status_code in {500, 502, 503, 504} and path in {
+                    "/send",
+                    "/react",
+                }
+                if not retryable or attempt >= 3:
+                    raise RuntimeError(
+                        f"Photon sidecar {path} returned {resp.status_code}: {text}"
+                    )
+                logger.warning(
+                    "[photon] sidecar %s returned %d (attempt %d/3), retrying: %s",
+                    path,
+                    resp.status_code,
+                    attempt,
+                    text,
+                )
+                await asyncio.sleep(1.5 * attempt)
+        assert resp is not None
         if resp.status_code != 200:
             raise RuntimeError(
                 f"Photon sidecar {path} returned {resp.status_code}: {resp.text[:200]}"
