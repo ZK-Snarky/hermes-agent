@@ -529,6 +529,23 @@ class PhotonAdapter(BasePlatformAdapter):
         candidates.sort(key=lambda item: item[0])
         return str(candidates[0][1])
 
+    @staticmethod
+    def _latest_journal_body(entry_uid: str) -> Optional[str]:
+        if not _SEBOS_DB_PATH.exists():
+            return None
+        try:
+            with sqlite3.connect(_SEBOS_DB_PATH) as conn:
+                row = conn.execute(
+                    "SELECT body FROM journal_entries WHERE entry_uid=? ORDER BY id DESC LIMIT 1",
+                    (entry_uid,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            logger.warning("[photon] could not read saved sebOS journal body: %s", exc)
+            return None
+        if not row:
+            return None
+        return str(row[0] or "").strip() or None
+
     async def _try_ingest_audio_journal_reply(
         self,
         *,
@@ -540,16 +557,23 @@ class PhotonAdapter(BasePlatformAdapter):
         media_urls: List[str],
         media_types: List[str],
     ) -> bool:
+        prompt_date = self._active_journal_prompt_date(timestamp)
+        if not prompt_date:
+            return False
         if not media_urls and "\ufffc" in text:
-            recovered = self._recent_audio_document_for_marker(timestamp)
+            recovered = None
+            for _ in range(12):
+                recovered = self._recent_audio_document_for_marker(timestamp)
+                if recovered:
+                    break
+                await asyncio.sleep(0.25)
             if recovered:
                 logger.info("[photon] recovered marker-only audio attachment for sebOS journal: %s", recovered)
                 media_urls = [recovered]
                 media_types = ["audio/caf"]
+            else:
+                logger.warning("[photon] marker-only journal audio had no recoverable cached CAF near %s", timestamp.isoformat())
         if not media_urls or not any((mime or "").lower().startswith("audio/") for mime in media_types):
-            return False
-        prompt_date = self._active_journal_prompt_date(timestamp)
-        if not prompt_date:
             return False
 
         audio_path = media_urls[0]
@@ -599,7 +623,10 @@ class PhotonAdapter(BasePlatformAdapter):
         if int(result.get("inserted") or 0) <= 0:
             return False
         if int(result.get("transcribed_ok") or 0) > 0:
-            if not await self._send_ack_reaction(space_id, message_id, "❤️"):
+            body = self._latest_journal_body(f"photon:{message_id}") if message_id else None
+            if body:
+                await self._send_quiet(space_id, self.truncate_message(f"Audio journal saved:\n\n{body}") [0])
+            elif not await self._send_ack_reaction(space_id, message_id, "❤️"):
                 await self._send_quiet(space_id, "Audio journal saved.")
         else:
             await self._send_quiet(space_id, "Audio received, but transcription failed.")
