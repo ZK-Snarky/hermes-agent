@@ -4,6 +4,14 @@ Instructions for AI coding assistants and developers working on the hermes-agent
 
 **Never give up on the right solution.**
 
+## Non-negotiable External SDK Rule
+
+Before changing or debugging any external API, SDK, platform, CLI, framework, or vendor integration, read the official docs first, then inspect the installed package source/type definitions that the running checkout uses. A bugfix that touches an SDK/platform and does not name the docs/source reference it used fails review. Do not build from guessed behavior or local side effects when docs exist.
+
+Canonical docs for current integrations:
+
+- Photon / Spectrum: `https://docs.photon.codes/llms.txt` first, then the specific Spectrum/iMessage page and installed `plugins/platforms/photon/sidecar/node_modules/` source/types.
+
 ## What Hermes Is
 
 Hermes is a personal AI agent that runs the same agent core across a CLI, a
