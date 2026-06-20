@@ -70,11 +70,11 @@ class TestScanSkillCommands:
             patch("agent.skill_utils.sys") as mock_sys,
         ):
             mock_sys.platform = "linux"
-            _make_skill(tmp_path, "imessage", frontmatter_extra="platforms: [macos]\n")
+            _make_skill(tmp_path, "notes", frontmatter_extra="platforms: [macos]\n")
             _make_skill(tmp_path, "web-search")
             result = scan_skill_commands()
         assert "/web-search" in result
-        assert "/imessage" not in result
+        assert "/notes" not in result
 
     def test_includes_matching_platform(self, tmp_path):
         """macOS-only skills should register slash commands on macOS."""
@@ -83,9 +83,9 @@ class TestScanSkillCommands:
             patch("agent.skill_utils.sys") as mock_sys,
         ):
             mock_sys.platform = "darwin"
-            _make_skill(tmp_path, "imessage", frontmatter_extra="platforms: [macos]\n")
+            _make_skill(tmp_path, "notes", frontmatter_extra="platforms: [macos]\n")
             result = scan_skill_commands()
-        assert "/imessage" in result
+        assert "/notes" in result
 
     def test_universal_skill_on_any_platform(self, tmp_path):
         """Skills without platforms field should register on any platform."""

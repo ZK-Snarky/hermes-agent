@@ -481,10 +481,10 @@ class TestBuildSkillsSystemPrompt:
         skills_dir.mkdir(parents=True)
 
         # macOS-only skill
-        mac_skill = skills_dir / "imessage"
+        mac_skill = skills_dir / "notes"
         mac_skill.mkdir()
         (mac_skill / "SKILL.md").write_text(
-            "---\nname: imessage\ndescription: Send iMessages\nplatforms: [macos]\n---\n"
+            "---\nname: notes\ndescription: Send iMessages\nplatforms: [macos]\n---\n"
         )
 
         # Universal skill
@@ -501,16 +501,16 @@ class TestBuildSkillsSystemPrompt:
             result = build_skills_system_prompt()
 
         assert "web-search" in result
-        assert "imessage" not in result
+        assert "notes" not in result
 
     def test_includes_matching_platform_skills(self, monkeypatch, tmp_path):
         """Skills with platforms: [macos] should appear on macOS."""
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         skills_dir = tmp_path / "skills" / "apple"
-        mac_skill = skills_dir / "imessage"
+        mac_skill = skills_dir / "notes"
         mac_skill.mkdir(parents=True)
         (mac_skill / "SKILL.md").write_text(
-            "---\nname: imessage\ndescription: Send iMessages\nplatforms: [macos]\n---\n"
+            "---\nname: notes\ndescription: Send iMessages\nplatforms: [macos]\n---\n"
         )
 
         from unittest.mock import patch
@@ -519,7 +519,7 @@ class TestBuildSkillsSystemPrompt:
             mock_sys.platform = "darwin"
             result = build_skills_system_prompt()
 
-        assert "imessage" in result
+        assert "notes" in result
         assert "Send iMessages" in result
 
     def test_excludes_disabled_skills(self, monkeypatch, tmp_path):

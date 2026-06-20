@@ -19,7 +19,6 @@ Hermes 在执行 `hermes update` 时也会同步内置技能，但同步清单�
 | [`apple-notes`](/user-guide/skills/bundled/apple/apple-apple-notes) | 通过 memo CLI 管理 Apple Notes：创建、搜索、编辑。 | `apple/apple-notes` |
 | [`apple-reminders`](/user-guide/skills/bundled/apple/apple-apple-reminders) | 通过 remindctl 操作 Apple Reminders：添加、列出、完成。 | `apple/apple-reminders` |
 | [`findmy`](/user-guide/skills/bundled/apple/apple-findmy) | 在 macOS 上通过 FindMy.app 追踪 Apple 设备/AirTag。 | `apple/findmy` |
-| [`imessage`](/user-guide/skills/bundled/apple/apple-imessage) | 在 macOS 上通过 imsg CLI 发送和接收 iMessage/SMS。 | `apple/imessage` |
 | [`macos-computer-use`](/user-guide/skills/bundled/apple/apple-macos-computer-use) | 在后台驱动 macOS 桌面——截图、鼠标、键盘、滚动、拖拽——不抢占用户的光标、键盘焦点或 Space。适用于任何支持工具调用的模型。每当需要 `computer_use` 工具时加载此技能。 | `apple/macos-computer-use` |
 
 ## autonomous-ai-agents
