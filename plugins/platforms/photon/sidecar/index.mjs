@@ -30,6 +30,8 @@
 //   - POST /unreact     -> {"ok": true} | 400 soft failure
 //       body: {"spaceId": "...", "messageId": "<target msg id>",
 //              "reactionId": "..." | null (restart-recovery fallback)}
+//   - POST /typing      -> {"ok": true}
+//       body: {"spaceId": "...", "state": "start" | "stop"}
 //   - POST /shutdown    -> {"ok": true}; then process exits
 //
 // On SIGINT/SIGTERM the sidecar calls `app.stop()` (3s graceful) before
@@ -111,6 +113,7 @@ let Spectrum,
   imessage,
   attachment,
   voice,
+  spectrumTyping,
   spectrumText,
   spectrumMarkdown;
 try {
@@ -118,6 +121,7 @@ try {
     Spectrum,
     attachment,
     voice,
+    typing: spectrumTyping,
     text: spectrumText,
     markdown: spectrumMarkdown,
   } = await import("spectrum-ts"));
@@ -641,6 +645,15 @@ const server = http.createServer(async (req, res) => {
         return badRequest(res, "reaction not removable");
       }
       return badRequest(res, "no tracked reaction for message");
+    }
+    if (req.url === "/typing") {
+      const { spaceId, state = "start" } = body || {};
+      if (!spaceId || (state !== "start" && state !== "stop")) {
+        return badRequest(res, "spaceId and state=start|stop are required");
+      }
+      const space = await resolveSpace(spaceId);
+      await space.send(spectrumTyping(state));
+      return ok(res, {});
     }
     res.statusCode = 404;
     res.setHeader("Content-Type", "application/json");

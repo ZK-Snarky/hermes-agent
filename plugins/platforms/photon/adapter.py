@@ -223,6 +223,10 @@ class PhotonAdapter(BasePlatformAdapter):
         self._sebos_rules_enabled = str(
             extra.get("sebos_rules") or os.getenv("PHOTON_SEBOS_RULES", "false")
         ).strip().lower() in {"true", "1", "yes", "on"}
+        self._typing_indicators_enabled = str(
+            extra.get("typing_indicators")
+            or os.getenv("PHOTON_TYPING_INDICATORS", "false")
+        ).strip().lower() in {"true", "1", "yes", "on"}
 
         # With markdown on, format_message preserves fences and the sidecar's
         # markdown() builder renders them (or degrades them readably).
@@ -1283,11 +1287,29 @@ class PhotonAdapter(BasePlatformAdapter):
         )
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
-        # iMessage typing indicators are noisy and can drift into duplicate/fallback
-        # behavior on shared routes. Photon intentionally no-ops typing.
+        # iMessage typing has proven noisy on shared Photon routes, so it stays
+        # behind an explicit opt-in kill switch. Rollback is instant: set
+        # platforms.photon.extra.typing_indicators=false or unset
+        # PHOTON_TYPING_INDICATORS, then restart the gateway.
+        if not self._typing_indicators_enabled:
+            return None
+        try:
+            await self._sidecar_call(
+                "/typing", {"spaceId": chat_id, "state": "start"}
+            )
+        except Exception as e:
+            logger.debug("[photon] send_typing failed: %s", e)
         return None
 
     async def stop_typing(self, chat_id: str) -> None:
+        if not self._typing_indicators_enabled:
+            return None
+        try:
+            await self._sidecar_call(
+                "/typing", {"spaceId": chat_id, "state": "stop"}
+            )
+        except Exception as e:
+            logger.debug("[photon] stop_typing failed: %s", e)
         return None
 
     # -- Reactions (tapbacks) -----------------------------------------------
