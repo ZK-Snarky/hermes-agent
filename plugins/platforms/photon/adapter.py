@@ -1570,7 +1570,7 @@ class PhotonAdapter(BasePlatformAdapter):
             # Couldn't fetch the URL — fall back to sending it as text.
             return await super().send_image(chat_id, image_url, caption, reply_to)
         return await self._sidecar_send_attachment(
-            chat_id, local_path, caption=caption,
+            chat_id, local_path, caption=caption, reply_to=reply_to,
         )
 
     async def send_image_file(
@@ -1583,7 +1583,7 @@ class PhotonAdapter(BasePlatformAdapter):
         **kwargs,
     ) -> SendResult:
         return await self._sidecar_send_attachment(
-            chat_id, image_path, caption=caption,
+            chat_id, image_path, caption=caption, reply_to=reply_to,
         )
 
     async def send_voice(
@@ -1596,7 +1596,7 @@ class PhotonAdapter(BasePlatformAdapter):
         **kwargs,
     ) -> SendResult:
         return await self._sidecar_send_attachment(
-            chat_id, audio_path, caption=caption, kind="voice",
+            chat_id, audio_path, caption=caption, kind="voice", reply_to=reply_to,
         )
 
     async def send_video(
@@ -1609,7 +1609,7 @@ class PhotonAdapter(BasePlatformAdapter):
         **kwargs,
     ) -> SendResult:
         return await self._sidecar_send_attachment(
-            chat_id, video_path, caption=caption,
+            chat_id, video_path, caption=caption, reply_to=reply_to,
         )
 
     async def send_document(
@@ -1623,7 +1623,7 @@ class PhotonAdapter(BasePlatformAdapter):
         **kwargs,
     ) -> SendResult:
         return await self._sidecar_send_attachment(
-            chat_id, file_path, name=file_name, caption=caption,
+            chat_id, file_path, name=file_name, caption=caption, reply_to=reply_to,
         )
 
     async def send_animation(
@@ -1985,6 +1985,7 @@ class PhotonAdapter(BasePlatformAdapter):
         mime_type: Optional[str] = None,
         caption: Optional[str] = None,
         kind: str = "attachment",
+        reply_to: Optional[str] = None,
     ) -> SendResult:
         """POST a local file to the sidecar's ``/send-attachment`` endpoint.
 
@@ -2018,11 +2019,14 @@ class PhotonAdapter(BasePlatformAdapter):
             body["mimeType"] = mime_type
         if caption:
             body["caption"] = caption
+        if reply_to:
+            body["replyToMessageId"] = reply_to
         try:
             data = await self._sidecar_call("/send-attachment", body)
         except Exception as e:
             return SendResult(success=False, error=str(e))
         self._record_sent_message(data.get("messageId"))
+        self._record_sent_thread_root(data.get("messageId"), reply_to)
         return SendResult(success=True, message_id=data.get("messageId"))
 
     async def _sidecar_call(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:

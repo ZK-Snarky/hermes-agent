@@ -24,7 +24,8 @@
 //   - POST /send-attachment -> {"ok": true, "messageId": "..."}
 //       body: {"spaceId": "...", "path": "...", "name": "..." | null,
 //              "mimeType": "..." | null, "caption": "..." | null,
-//              "kind": "attachment" | "voice"}
+//              "kind": "attachment" | "voice",
+//              "replyToMessageId": "..." | null}
 //   - POST /react       -> {"ok": true, "reactionId": "..." | null}
 //       body: {"spaceId": "...", "messageId": "<target msg id>",
 //              "emoji": "👀"}
@@ -698,7 +699,7 @@ const server = http.createServer(async (req, res) => {
       return ok(res, { messageId: result?.id || null, threaded: false });
     }
     if (req.url === "/send-attachment") {
-      const { spaceId, path, name, mimeType, caption, kind } =
+      const { spaceId, path, name, mimeType, caption, kind, replyToMessageId = null } =
         body || {};
       if (!spaceId || typeof path !== "string" || !path) {
         return badRequest(res, "spaceId and path are required");
@@ -716,13 +717,50 @@ const server = http.createServer(async (req, res) => {
           ? voice(path, Object.keys(opts).length ? opts : undefined)
           : attachment(path, Object.keys(opts).length ? opts : undefined);
 
-      const result = await space.send(builder);
+      let result;
+      let threaded = false;
+      if (replyToMessageId) {
+        try {
+          const target =
+            knownMessages.get(replyToMessageId) ??
+            (await space.getMessage(replyToMessageId));
+          if (target && spectrumReply) {
+            result = await space.send(spectrumReply(builder, target));
+            threaded = true;
+          } else {
+            console.error(
+              `photon-sidecar: attachment reply target ${replyToMessageId} not found; falling back to flat send`
+            );
+          }
+        } catch (e) {
+          console.error(
+            "photon-sidecar: threaded attachment reply failed; falling back to flat send: " +
+              (e && e.message ? e.message : String(e))
+          );
+        }
+      }
+      if (!result) {
+        result = await space.send(builder);
+      }
+      rememberKnownMessage(result);
 
       // iMessage delivers the caption as a separate bubble; send it
       // after the media so the attachment renders first.
       if (caption && typeof caption === "string") {
         try {
-          await space.send(spectrumText(caption));
+          const captionBuilder = spectrumText(caption);
+          if (replyToMessageId) {
+            const target =
+              knownMessages.get(replyToMessageId) ??
+              (await space.getMessage(replyToMessageId));
+            if (target && spectrumReply) {
+              await space.send(spectrumReply(captionBuilder, target));
+            } else {
+              await space.send(captionBuilder);
+            }
+          } else {
+            await space.send(captionBuilder);
+          }
         } catch (e) {
           console.error(
             "photon-sidecar: attachment sent but caption failed: " +
@@ -730,7 +768,7 @@ const server = http.createServer(async (req, res) => {
           );
         }
       }
-      return ok(res, { messageId: result?.id || null });
+      return ok(res, { messageId: result?.id || null, threaded });
     }
     if (req.url === "/react") {
       const { spaceId, messageId, emoji } = body || {};

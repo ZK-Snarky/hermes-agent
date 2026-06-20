@@ -89,6 +89,38 @@ async def test_send_passes_reply_to_sidecar_and_maps_root(
 
 
 @pytest.mark.asyncio
+async def test_voice_reply_passes_reply_to_sidecar_and_maps_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    adapter = _make_adapter(monkeypatch)
+    calls = _capture_sidecar(adapter)
+    audio = tmp_path / "reply.m4a"
+    audio.write_bytes(b"fake audio")
+
+    result = await adapter.send_voice(
+        "+155****4567",
+        str(audio),
+        reply_to="user-audio-msg-1",
+    )
+
+    assert result.success is True
+    assert calls == [
+        (
+            "/send-attachment",
+            {
+                "spaceId": "+155****4567",
+                "path": str(audio),
+                "kind": "voice",
+                "mimeType": "audio/mp4a-latm",
+                "replyToMessageId": "user-audio-msg-1",
+            },
+        )
+    ]
+    assert adapter._sent_thread_roots["bot-msg-1"] == "user-audio-msg-1"
+
+
+@pytest.mark.asyncio
 async def test_t_prefix_starts_thread_session_and_strips_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
