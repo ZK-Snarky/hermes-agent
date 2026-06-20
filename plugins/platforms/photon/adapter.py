@@ -249,10 +249,13 @@ class PhotonAdapter(BasePlatformAdapter):
             or os.getenv("PHOTON_INTENT_GATE_MIN_CONFIDENCE")
             or 0.86
         )
-        self._typing_indicators_enabled = str(
-            extra.get("typing_indicators")
-            or os.getenv("PHOTON_TYPING_INDICATORS", "false")
-        ).strip().lower() in {"true", "1", "yes", "on"}
+        # Photon/Spectrum iMessage typing indicators currently route through
+        # Spectrum's typing() content, which calls the low-level
+        # ChatsResource.setTyping RPC. That endpoint has proven unreliable on
+        # shared Photon routes and can drop calls/log noisy upstream failures.
+        # Keep this hard-disabled until a safe implementation exists; user
+        # config/env cannot accidentally re-enable the broken path.
+        self._typing_indicators_enabled = False
         self._ack_reactions_enabled = str(
             extra.get("ack_reactions")
             or os.getenv("PHOTON_ACK_REACTIONS", "false")
@@ -2053,29 +2056,17 @@ class PhotonAdapter(BasePlatformAdapter):
         )
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
-        # iMessage typing has proven noisy on shared Photon routes, so it stays
-        # behind an explicit opt-in kill switch. Rollback is instant: set
-        # platforms.photon.extra.typing_indicators=false or unset
-        # PHOTON_TYPING_INDICATORS, then restart the gateway.
-        if not self._typing_indicators_enabled:
-            return None
-        try:
-            await self._sidecar_call(
-                "/typing", {"spaceId": chat_id, "state": "start"}
-            )
-        except Exception as e:
-            logger.debug("[photon] send_typing failed: %s", e)
+        # Deliberate no-op: Photon typing currently maps to Spectrum
+        # ``typing()`` -> low-level ``ChatsResource.setTyping``, which is not
+        # reliable enough for normal operation. Do not consult config/env here;
+        # re-enabling requires replacing this with an explicitly safe path.
+        del chat_id, metadata
         return None
 
     async def stop_typing(self, chat_id: str) -> None:
-        if not self._typing_indicators_enabled:
-            return None
-        try:
-            await self._sidecar_call(
-                "/typing", {"spaceId": chat_id, "state": "stop"}
-            )
-        except Exception as e:
-            logger.debug("[photon] stop_typing failed: %s", e)
+        # See send_typing(): stopping would hit the same unreliable Photon
+        # setTyping route, so this remains a no-op too.
+        del chat_id
         return None
 
     # -- Reactions (tapbacks) -----------------------------------------------

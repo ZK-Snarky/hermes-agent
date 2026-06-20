@@ -23,7 +23,7 @@ talks to it over loopback.
 │  (iMessage line owner)  │   space.send()    │  (plugins/…/sidecar) │
 └─────────────────────────┘                   └──────────┬───────────┘
                                        GET /inbound (NDJSON) │  ▲ POST /send
-                                       inbound events        ▼  │ /typing
+                                       inbound events        ▼  │
                                               ┌──────────────────────┐
                                               │  PhotonAdapter        │
                                               │  (Python, in gateway) │
@@ -35,9 +35,11 @@ talks to it over loopback.
   `GET /inbound` (NDJSON). The adapter dedupes on `messageId` and dispatches
   a `MessageEvent` to the gateway. It reconnects automatically if the stream
   drops; the sidecar owns the gRPC reconnect to Photon.
-- **Outbound**: `send` / `send_typing` / reaction tapbacks are loopback POSTs
-  to the sidecar (`/send`, `/send-attachment`, `/typing`, `/react`,
-  `/unreact`), authenticated with a shared `X-Hermes-Sidecar-Token`.
+- **Outbound**: `send` and reaction tapbacks are loopback POSTs to the sidecar
+  (`/send`, `/send-attachment`, `/react`, `/unreact`), authenticated with a
+  shared `X-Hermes-Sidecar-Token`. Photon typing is intentionally disabled;
+  the compatibility `/typing` endpoint is a no-op because Spectrum typing maps
+  to unreliable upstream `setTyping` on shared iMessage routes.
 
 ## First-time setup
 
