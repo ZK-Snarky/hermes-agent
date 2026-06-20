@@ -97,7 +97,6 @@ _SEBOS_AUDIO_INBOX = _SEBOS_ROOT / "inbox" / "audio"
 _DOCUMENT_CACHE_DIR = Path.home() / ".hermes" / "cache" / "documents"
 _THREAD_START_RE = re.compile(r"^\s*(?:t|thread)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
 _THREAD_CONTINUE_RE = re.compile(r"^\s*t\+\s*:?\s*(.*)$", re.IGNORECASE | re.DOTALL)
-_COMMAND_RAIL_HINT = "Use t: for chat. Use j:, remind me, note this, or board for Mission Control."
 
 # Group-chat mention wake words. When ``require_mention`` is enabled, group
 # messages are ignored unless they match one of these patterns — same
@@ -265,7 +264,6 @@ class PhotonAdapter(BasePlatformAdapter):
         # Hermes session instead of polluting the main command lane.
         self._sent_thread_roots: Dict[str, str] = {}
         self._last_thread_root_by_chat: Dict[str, str] = {}
-        self._command_hint_sent_by_chat: Dict[str, float] = {}
 
         # Group-chat mention gating (iMessage parity). When enabled,
         # group messages are ignored unless they match a wake word; DMs are
@@ -754,14 +752,6 @@ class PhotonAdapter(BasePlatformAdapter):
                 reply = "Handled." if status != "error" else "Could not handle that."
             await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH])
             return "handled"
-        if mtype == MessageType.TEXT and stripped:
-            key = self._normalize_chat_key(space_id)
-            now = time.time()
-            last_hint = self._command_hint_sent_by_chat.get(key, 0.0)
-            if now - last_hint > 3600:
-                self._command_hint_sent_by_chat[key] = now
-                await self._send_quiet(space_id, _COMMAND_RAIL_HINT)
-            return "handled"
         return None
 
     @staticmethod
@@ -777,9 +767,7 @@ class PhotonAdapter(BasePlatformAdapter):
         prefixes = (
             "j:",
             "journal:",
-            "remind me ",
             "reminder:",
-            "note this",
             "note:",
             "suppress ",
             "hide ",

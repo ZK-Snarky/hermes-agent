@@ -16,7 +16,7 @@ def _make_adapter(monkeypatch: pytest.MonkeyPatch, extra: dict | None = None) ->
 
 
 @pytest.mark.asyncio
-async def test_sebos_rules_unknown_text_stays_on_command_rail(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sebos_rules_unknown_text_falls_through_to_hermes(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _make_adapter(monkeypatch)
     calls = []
 
@@ -41,14 +41,9 @@ async def test_sebos_rules_unknown_text_stays_on_command_rail(monkeypatch: pytes
         media_types=[],
     )
 
-    assert result == "handled"
+    assert result is None
     assert calls == []
-    assert sent == [
-        (
-            "space-1",
-            "Use t: for chat. Use j:, remind me, note this, or board for Mission Control.",
-        )
-    ]
+    assert sent == []
 
 
 @pytest.mark.asyncio
@@ -71,7 +66,7 @@ async def test_sebos_rules_explicit_command_routes_to_sebos(monkeypatch: pytest.
     result = await adapter._handle_sebos_rules(
         space_id="space-1",
         message_id="msg-1",
-        text="remind me tomorrow at 9 to call Chaz",
+        text="reminder: tomorrow at 9 call Chaz",
         mtype=MessageType.TEXT,
         media_urls=[],
         media_types=[],
@@ -79,8 +74,29 @@ async def test_sebos_rules_explicit_command_routes_to_sebos(monkeypatch: pytest.
 
     assert result == "handled"
     assert calls[0][0][:6] == ("sebos-route-command", "--text", "-", "--write", "--db", str(adapter_module._SEBOS_DB_PATH))
-    assert calls[0][1] == "remind me tomorrow at 9 to call Chaz"
+    assert calls[0][1] == "reminder: tomorrow at 9 call Chaz"
     assert sent == [("space-1", "Reminder set.")]
+
+
+@pytest.mark.asyncio
+async def test_sebos_rules_natural_reminder_goes_to_hermes_for_date_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _make_adapter(monkeypatch)
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        raise AssertionError("natural reminders need model/date reasoning before sebOS writes")
+
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+
+    result = await adapter._handle_sebos_rules(
+        space_id="space-1",
+        message_id="msg-1",
+        text="remind me monday to file llc paperwork",
+        mtype=MessageType.TEXT,
+        media_urls=[],
+        media_types=[],
+    )
+
+    assert result is None
 
 
 @pytest.mark.asyncio

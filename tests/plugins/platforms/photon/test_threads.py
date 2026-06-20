@@ -124,7 +124,7 @@ async def test_reply_to_bot_message_resumes_thread_root(
 
 
 @pytest.mark.asyncio
-async def test_main_chat_plain_text_stays_command_rail(
+async def test_main_chat_plain_text_routes_to_hermes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _make_adapter(monkeypatch, sebos_rules=True)
@@ -138,13 +138,10 @@ async def test_main_chat_plain_text_stays_command_rail(
 
     await adapter._dispatch_inbound(_text_event("what do you think?"))
 
-    assert captured == []
-    assert quiet == [
-        (
-            "+155****4567",
-            "Use t: for chat. Use j:, remind me, note this, or board for Mission Control.",
-        )
-    ]
+    assert len(captured) == 1
+    assert captured[0].text == "what do you think?"
+    assert captured[0].source.thread_id is None
+    assert quiet == []
 
 
 @pytest.mark.asyncio
