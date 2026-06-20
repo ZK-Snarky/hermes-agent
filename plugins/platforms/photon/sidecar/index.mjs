@@ -231,6 +231,10 @@ function stripInvalidPartIndexTarget(target) {
   if (!target || typeof target !== "object") return target;
   const clone = { ...target };
   delete clone.partIndex;
+  if (!clone.parentId && typeof clone.id === "string") {
+    const child = clone.id.match(/^p:\d+\/(.+)$/);
+    if (child) clone.parentId = child[1];
+  }
   return clone;
 }
 
@@ -740,12 +744,18 @@ const server = http.createServer(async (req, res) => {
         return badRequest(res, "message not found");
       }
       const reactionValue = normalizeReactionForIMessage(emoji);
+      const targetForReaction = /^p:\d+\//.test(String(messageId))
+        ? stripInvalidPartIndexTarget(target)
+        : target;
       let handle;
       try {
-        handle = await target.react(reactionValue);
+        handle =
+          targetForReaction === target && typeof target.react === "function"
+            ? await target.react(reactionValue)
+            : await space.send(spectrumReaction(reactionValue, targetForReaction));
       } catch (e) {
         const message = e && e.message ? String(e.message) : String(e);
-        if (!/part index is out of range/i.test(message) || !spectrumReaction) {
+        if (!/part index is out of range|message does not exist/i.test(message) || !spectrumReaction) {
           throw e;
         }
         // Spectrum may attach a stale/invalid partIndex to iMessage audio
