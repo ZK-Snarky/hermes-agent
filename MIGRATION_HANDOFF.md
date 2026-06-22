@@ -1541,3 +1541,56 @@ Next recommended single unit:
 
 Blockers or decisions needed from Seb:
 - Approval required before staging/committing the sebOS provider-order package, committing the Hermes handoff doc, pushing, opening PRs, restarting gateway, live smoke tests, launchd edits, or any Apple-data mutation.
+
+## Unit 20 sebos_event plugin migration / messaging opt-in package — 2026-06-21 22:19 MDT
+
+Scope executed:
+- Packaged only the Hermes `sebos_event` plugin migration and generic messaging opt-in tooling.
+- Did not touch Athena goals injection, gateway/platform hooks, session/Photon guard fixes, Gab, sanitizer/platform-capability tests, live config, gateway process, launchd, or external systems.
+
+Files in package:
+- `/Users/clawdolf/.hermes/hermes-agent/hermes_cli/plugins.py`
+  - Extends `PluginContext.register_tool(...)` with `include_in_messaging_toolsets` and passes it to the registry.
+- `/Users/clawdolf/.hermes/hermes-agent/tools/registry.py`
+  - Adds `ToolEntry.include_in_messaging_toolsets` and `ToolRegistry.get_messaging_optin_tool_names()`.
+- `/Users/clawdolf/.hermes/hermes-agent/toolsets.py`
+  - Removes hardcoded `sebos_event` from `_HERMES_CORE_TOOLS`.
+  - Unions plugin-registered opt-in tools into the Hermes core/messaging toolset family at resolve time.
+- `/Users/clawdolf/.hermes/hermes-agent/tools/sebos_event.py`
+  - Deleted from Hermes core. The active implementation lives in the local `hermes-sebos` user plugin.
+- `/Users/clawdolf/.hermes/hermes-agent/tests/test_toolsets.py`
+  - Adds coverage proving opt-in tools resolve into messaging/core toolsets and not constrained toolsets.
+- `/Users/clawdolf/.hermes/hermes-agent/tests/tools/test_sebos_event.py`
+  - Loads the plugin-owned `sebos_event` implementation from `/Users/clawdolf/.hermes/plugins/hermes-sebos/tools.py` for contract tests.
+- `/Users/clawdolf/.hermes/hermes-agent/MIGRATION_HANDOFF.md`
+  - This handoff entry.
+
+Verification run before commit:
+```bash
+cd /Users/clawdolf/.hermes/hermes-agent
+python -m pytest tests/test_toolsets.py tests/tools/test_sebos_event.py -q -o 'addopts='
+# 34 passed in 1.27s
+
+python -m py_compile hermes_cli/plugins.py tools/registry.py toolsets.py tests/test_toolsets.py tests/tools/test_sebos_event.py
+# passed, no output
+```
+
+Classification:
+- Generic Hermes extension point: `include_in_messaging_toolsets` is generic and replaces a hardcoded core tool entry with plugin opt-in behavior.
+- Local Seb-specific tool ownership: `sebos_event` belongs to `~/.hermes/plugins/hermes-sebos`, not Hermes core.
+- Runtime behavior target: messaging toolsets still resolve `sebos_event` when the plugin is installed/enabled, but Hermes core no longer owns the tool implementation.
+
+Rollback notes:
+- Revert this package in Hermes to restore core `tools/sebos_event.py` and hardcoded `_HERMES_CORE_TOOLS` membership.
+- The `hermes-sebos` plugin remains separately tracked at commit `0df6693` and can continue owning the tool if the generic core opt-in survives.
+
+Remaining dirty Hermes work after this package:
+- Athena goals injection: `agent/agent_init.py`, `agent/prompt_builder.py`, `agent/system_prompt.py`, `tests/agent/test_prompt_builder.py`, `tests/agent/test_system_prompt.py`.
+- Generic platform capability hooks / outbound sanitizer: `gateway/platform_registry.py`, `gateway/run.py`, `tests/gateway/test_telegram_noise_filter.py`, untracked `gateway/outbound_sanitize.py`, untracked `tests/gateway/test_platform_capabilities.py`.
+- Session/Photon guard fixes: `gateway/session.py`, `tests/gateway/test_session.py`, `tests/plugins/platforms/photon/test_shared_cloud_guard.py`.
+
+Next recommended single unit:
+- Package the generic platform capability hooks / outbound sanitizer as a separate upstreamable Hermes commit, or run a review-only pass first if Seb wants lower risk. Do not mix Athena goals into that package.
+
+Blockers or decisions needed from Seb:
+- Approval required before staging/committing this package, pushing, opening PRs, restarting gateway, editing launchd, live sends, or mutating any external system.

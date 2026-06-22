@@ -253,3 +253,42 @@ class TestDefaultPlatformWebSearchCoverage:
 
     def test_hermes_api_server_toolset_includes_web_search(self):
         assert "web_search" in resolve_toolset("hermes-api-server")
+
+
+class TestMessagingOptInTools:
+    """A plugin tool with include_in_messaging_toolsets=True is unioned into the
+    messaging/core family at resolve time, without being hardcoded in core."""
+
+    def _registry_with_optin(self):
+        reg = ToolRegistry()
+        reg.register(
+            name="optin_tool",
+            toolset="myplugin",
+            schema=_make_schema("optin_tool", "Opt-in tool"),
+            handler=_dummy_handler,
+            include_in_messaging_toolsets=True,
+        )
+        reg.register(
+            name="plain_tool",
+            toolset="myplugin",
+            schema=_make_schema("plain_tool", "Plain tool"),
+            handler=_dummy_handler,
+        )
+        return reg
+
+    def test_optin_tool_resolves_into_messaging_toolsets(self, monkeypatch):
+        monkeypatch.setattr("tools.registry.registry", self._registry_with_optin())
+        for ts in ["hermes-telegram", "hermes-discord", "hermes-slack", "hermes-cli"]:
+            resolved = resolve_toolset(ts)
+            assert "optin_tool" in resolved, f"{ts} missing opt-in tool"
+            assert "plain_tool" not in resolved, f"{ts} leaked non-opt-in tool"
+
+    def test_optin_tool_excluded_from_non_core_toolsets(self, monkeypatch):
+        monkeypatch.setattr("tools.registry.registry", self._registry_with_optin())
+        # Webhook is intentionally constrained; acp/api-server are curated.
+        for ts in ["hermes-webhook", "hermes-acp", "hermes-api-server", "web"]:
+            assert "optin_tool" not in resolve_toolset(ts), f"{ts} wrongly got opt-in tool"
+
+    def test_registry_query_returns_optin_names(self):
+        reg = self._registry_with_optin()
+        assert reg.get_messaging_optin_tool_names() == ["optin_tool"]

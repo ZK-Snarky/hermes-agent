@@ -329,6 +329,7 @@ class PluginContext:
         description: str = "",
         emoji: str = "",
         override: bool = False,
+        include_in_messaging_toolsets: bool = False,
     ) -> None:
         """Register a tool in the global registry **and** track it as plugin-provided.
 
@@ -336,6 +337,10 @@ class PluginContext:
         same name (e.g. swap the default ``browser_navigate`` for a custom
         CDP-backed implementation). Without it, attempting to register a name
         already claimed by a different toolset is rejected.
+
+        Pass ``include_in_messaging_toolsets=True`` to surface the tool across
+        every Hermes messaging toolset (telegram/discord/slack/photon/...)
+        without registering it once per platform.
         """
         from tools.registry import registry
 
@@ -350,6 +355,7 @@ class PluginContext:
             description=description,
             emoji=emoji,
             override=override,
+            include_in_messaging_toolsets=include_in_messaging_toolsets,
         )
         self._manager._plugin_tool_names.add(name)
         logger.debug(

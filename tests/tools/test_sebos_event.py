@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
-from tools import sebos_event
+import pytest
+
+# sebos_event moved out of Hermes core into the hermes-sebos user plugin. The
+# plugin lives outside the repo (~/.hermes/plugins/hermes-sebos), so load its
+# tools module by path. Skip cleanly if the plugin isn't installed.
+_PLUGIN_TOOLS = Path.home() / ".hermes" / "plugins" / "hermes-sebos" / "tools.py"
+if not _PLUGIN_TOOLS.exists():
+    pytest.skip(
+        "hermes-sebos plugin not installed; sebos_event lives in the plugin",
+        allow_module_level=True,
+    )
+_spec = importlib.util.spec_from_file_location("hermes_sebos_tools_under_test", _PLUGIN_TOOLS)
+sebos_event = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(sebos_event)
 
 
 def test_emit_writes_atomic_event_file_and_redacts_payload(tmp_path):

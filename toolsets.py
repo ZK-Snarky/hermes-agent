@@ -71,8 +71,10 @@ _HERMES_CORE_TOOLS = [
     "kanban_unblock",
     # Computer use (macOS, gated on cua-driver being installed via check_fn)
     "computer_use",
-    # sebOS Live Board event emission (gated on ~/.hermes/sebos via check_fn)
-    "sebos_event",
+    # NOTE: sebos_event is no longer hardcoded here. It is provided by the
+    # ``hermes-sebos`` plugin via
+    # ``register_tool(..., include_in_messaging_toolsets=True)`` and unioned
+    # into the messaging toolsets at resolve time (see resolve_toolset).
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,
@@ -566,8 +568,33 @@ TOOLSETS = {
     "hermes-gateway": {
         "description": "Gateway toolset - union of all messaging platform tools",
         "tools": [],
+        "includes": []
     }
 }
+
+
+# Toolsets that share the full Hermes core tool set (CLI, cron, and every
+# messaging platform). Computed by membership rather than a hand-maintained
+# list so new platforms that reference ``_HERMES_CORE_TOOLS`` are picked up
+# automatically. Tools registered with ``include_in_messaging_toolsets=True``
+# are unioned into exactly these toolsets at resolve time — this is what makes
+# the ``hermes-sebos`` plugin's ``sebos_event`` available everywhere the
+# hardcoded core entry used to put it.
+_CORE_TOOLS_SET = frozenset(_HERMES_CORE_TOOLS)
+_HERMES_CORE_FAMILY = frozenset(
+    name
+    for name, ts in TOOLSETS.items()
+    if _CORE_TOOLS_SET and _CORE_TOOLS_SET.issubset(set(ts.get("tools", [])))
+)
+
+
+def _messaging_optin_tool_names() -> Set[str]:
+    """Tool names plugins opted into all messaging toolsets (registry-backed)."""
+    try:
+        from tools.registry import registry
+        return set(registry.get_messaging_optin_tool_names())
+    except Exception:
+        return set()
 
 
 
@@ -669,6 +696,7 @@ def resolve_toolset(name: str, visited: Set[str] = None) -> List[str]:
                 from gateway.platform_registry import platform_registry
                 if platform_registry.is_registered(platform_name):
                     plugin_tools = set(_HERMES_CORE_TOOLS)
+                    plugin_tools.update(_messaging_optin_tool_names())
                     try:
                         from tools.registry import registry
                         plugin_tools.update(
@@ -692,7 +720,13 @@ def resolve_toolset(name: str, visited: Set[str] = None) -> List[str]:
     for included_name in toolset.get("includes", []):
         included_tools = resolve_toolset(included_name, visited)
         tools.update(included_tools)
-    
+
+    # Union plugin tools opted into the messaging/core family (e.g. the
+    # hermes-sebos plugin's sebos_event). Replaces the old hardcoded entry in
+    # _HERMES_CORE_TOOLS so the tool lives in its plugin, not core.
+    if name in _HERMES_CORE_FAMILY:
+        tools.update(_messaging_optin_tool_names())
+
     return sorted(tools)
 
 
