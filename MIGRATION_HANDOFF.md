@@ -1383,3 +1383,161 @@ Next recommended single unit:
 
 Blockers or decisions needed from Seb:
 - Approval required before staging/committing Hermes `MIGRATION_HANDOFF.md`, pushing, opening PRs, restarting gateway, live smoke tests, or adding any Apple Notes default write path.
+
+## Unit 18 remaining Hermes dirty-work review + Apple provider-order audit — 2026-06-21 21:35 MDT
+
+Scope executed:
+- Ran the approved review/sorting unit only.
+- Included Apple Calendar/Reminders provider-order audit.
+- Findings only: no implementation, staging, commit, push, gateway restart, launchd edit, live send, or Apple-data mutation.
+- Read-only `event --help` / `remindctl --help` probes were run; read-only `event reminders list --json` and `event calendar list --json` probes were run to verify provider capability. Personal item contents were not copied into this handoff.
+
+Current repo state:
+- Hermes repo: branch `clean-stock`, HEAD `7984b418e docs(migration): record boundary packaging units`, dirty runtime work remains.
+- sebOS repo: branch `main`, HEAD `2dc2647 feat(router): add read-only reminder command intents`, clean.
+- `hermes-sebos` plugin repo: branch `main`, HEAD `0df6693 package Photon sebOS boundary facade`, clean except ignored `__pycache__/`.
+
+Remaining Hermes dirty work classified:
+1. `sebos_event` plugin migration / messaging opt-in tooling:
+   - Files: `hermes_cli/plugins.py`, `tools/registry.py`, `toolsets.py`, `tools/sebos_event.py` deletion, `tests/test_toolsets.py`, `tests/tools/test_sebos_event.py`.
+   - Moves the `sebos_event` tool out of Hermes core and into the tracked `hermes-sebos` user plugin, with a generic `include_in_messaging_toolsets=True` registry/toolset opt-in.
+   - Risk: medium. This is generic core/toolset behavior plus a local plugin dependency. It is the best next commit candidate because it completes the plugin boundary migration and removes Seb-specific tool code from core.
+   - Needs review: confirm plugin is loaded before messaging toolset resolution in all runtimes, and that missing plugin fails as absent tool rather than breaking startup.
+2. Athena goals injection:
+   - Files: `agent/agent_init.py`, `agent/prompt_builder.py`, `agent/system_prompt.py`, `tests/agent/test_prompt_builder.py`, `tests/agent/test_system_prompt.py`.
+   - Injects sebOS `athena_goals.json` as prompt context.
+   - Risk: medium-high for upstreamability. It is Seb/Athena-specific and belongs in profile/plugin/config if possible, not generic Hermes core, unless kept as local patch.
+3. Generic platform capability hooks / clean inbox / outbound sanitizer:
+   - Files: `gateway/platform_registry.py`, `gateway/run.py`, `gateway/outbound_sanitize.py`, `tests/gateway/test_platform_capabilities.py`, `tests/gateway/test_telegram_noise_filter.py`.
+   - Replaces hardcoded Photon clean-inbox/final-response sanitizer branches with PlatformEntry capabilities.
+   - Risk: medium. Generic and upstreamable in shape, but affects gateway outbound delivery for all platforms with registered capabilities. Good separate package after `sebos_event` migration.
+4. Session/platform cleanup and Photon shared-cloud guard fixes:
+   - Files: `gateway/session.py`, `tests/gateway/test_session.py`, `tests/plugins/platforms/photon/test_shared_cloud_guard.py`.
+   - Removes stale iMessage guidance from session prompt and updates Photon shared-cloud auth expectation from Bearer to Basic id:secret.
+   - Risk: low-medium. Should split into two bugfix commits if possible: session prompt cleanup and shared-cloud Basic auth test/behavior alignment.
+5. Migration docs:
+   - `MIGRATION_HANDOFF.md` is modified by this review-only unit.
+   - Risk: low. Commit as docs-only after Seb approval if the review record should be tracked.
+
+Provider-order audit findings:
+- Account context was safe for read-only CLI probes: `shell_user=clawdolf`, `home=/Users/clawdolf`, `console_user=clawdolf`.
+- `event` exists at `/opt/homebrew/bin/event`; `remindctl` exists at `/opt/homebrew/bin/remindctl`.
+- `event reminders list --help` confirms read support with `--json`, optional `--list`, and optional completed-reminder inclusion.
+- `event calendar list --help` confirms Calendar read support with `--json`, `--start`, `--end`, and optional calendar filter.
+- Read-only probe `event reminders list --json` returned JSON successfully, proving `event` can read reminders on this Mac.
+- Read-only probe `event calendar list --start <today> --end <tomorrow> --json` returned JSON successfully, proving `event` can read Calendar on this Mac.
+- Focused provider tests passed: `tests/test_reminder_writer.py tests/test_calendars.py tests/test_note_reminder.py` → `28 passed in 1.80s`.
+- Syntax check passed for `lib/reminder_writer.py`, `lib/reminders.py`, `lib/calendars.py`, `lib/calendar_writer.py`, `lib/note_reminder.py`.
+
+Provider-order verdict:
+- Calendar reads: already correct. `lib/calendars.py` uses `event calendar list --json` primary in `auto`, with read-only local Calendar SQLite fallback. Strict `SEBOS_CALENDAR_READER=event` blocks instead of falling back.
+- Calendar writes: already correct. `lib/calendar_writer.py` uses `event calendar create/update/delete` only. No remindctl path applies.
+- Reminder writes: already correct. `lib/reminder_writer.py` uses provider order `event → remindctl` for `provider="auto"`. Advanced/native fields do not degrade to remindctl unless explicitly allowed.
+- Reminder reads: should be changed in a future unit. `lib/reminders.py` currently uses `remindctl` primary, then JXA/osascript, then read-only Apple Reminders SQLite fallback. Since `event reminders list --json` works on this Mac, the intended next provider-order unit is to make reminder reads `event` primary, with `remindctl` fallback, then JXA/SQLite fallbacks.
+- Reminder delete/match reads: also still use `remindctl show all --json` in `lib/reminder_writer.py` for delete matching. Future provider-order cleanup should consider `event reminders list --json` for matching before `remindctl`, or document why delete remains remindctl-backed.
+- User-facing copy: no provider names should leak through Photon/Athena. Provider/tool names should stay in logs/details/handoff/debug only. Photon should keep routing to plugin/sebOS boundary and never choose provider order itself.
+
+Verification run:
+```bash
+cd /Users/clawdolf/.hermes/hermes-agent
+python -m pytest tests/agent/test_prompt_builder.py tests/agent/test_system_prompt.py tests/gateway/test_session.py tests/gateway/test_telegram_noise_filter.py tests/gateway/test_platform_capabilities.py tests/plugins/platforms/photon/test_shared_cloud_guard.py tests/test_toolsets.py tests/tools/test_sebos_event.py -q -o 'addopts='
+# 299 passed, 1 skipped in 11.47s
+
+python -m pytest tests/plugins/platforms/photon/test_sebos_rules.py tests/plugins/platforms/photon/test_intent_gate.py tests/tools/test_sebos_event.py -q -o 'addopts='
+# 43 passed in 1.80s
+
+cd /Users/clawdolf/.hermes/sebos
+python3 -m pytest tests/test_command_router.py tests/test_reminders.py tests/test_journal_pending_prompt_cli.py -q
+# 58 passed in 0.64s
+
+python3 -m pytest tests/test_reminder_writer.py tests/test_calendars.py tests/test_note_reminder.py -q
+# 28 passed in 1.80s
+```
+
+Next recommended single unit:
+- Package only the Hermes `sebos_event` plugin migration / messaging opt-in tooling: `hermes_cli/plugins.py`, `tools/registry.py`, `toolsets.py`, deletion of `tools/sebos_event.py`, `tests/test_toolsets.py`, and `tests/tools/test_sebos_event.py`. Do not mix Athena goals or gateway platform hooks into that commit.
+
+Next provider-order unit after Hermes sorting:
+- Implement reminder reads as `event` primary with `remindctl` fallback in sebOS, then update tests. Keep the provider choice inside sebOS; do not expose it to Photon or user-facing copy.
+
+Blockers or decisions needed from Seb:
+- Approval required before any implementation, staging, commit, push, gateway restart, launchd edit, live smoke test, iMessage send, or Apple-data mutation.
+- Explicit approval required before the future reminder-read provider-order implementation because it changes Apple Reminders read provider order, even though it should remain read-only.
+
+## Unit 19 reminder provider-order implementation — 2026-06-21 22:08 MDT
+
+Scope executed:
+- Implemented Seb-approved provider-order change: `event` is now primary over `remindctl` for the remaining Reminders read/match paths.
+- No code was staged or committed. No push, gateway restart, launchd edit, live send, or Apple-data mutation.
+- Live Apple operation was read-only: `reminders.collect(...)` wrote only to a temporary sebOS DB and read Reminders through `event`.
+
+Files changed:
+- `/Users/clawdolf/.hermes/sebos/lib/reminders.py`
+  - Added `run_event_all(...)` for `event reminders list --json`.
+  - `collect(...)` now tries `event` once, buckets into `today` / `overdue` / `week`, then falls back to `remindctl`, JXA/osascript, then read-only SQLite.
+  - Normalizes EventKit-style fields like `externalId`, `dueDate`, `list`, and `isCompleted`.
+- `/Users/clawdolf/.hermes/sebos/lib/reminder_writer.py`
+  - Delete matching now lists incomplete reminders through `event reminders list --json` first, with `remindctl show all --json` fallback.
+  - Delete execution now tries `event reminders delete --id <id>` first, with `remindctl delete <id> --force` fallback.
+- `/Users/clawdolf/.hermes/sebos/lib/command_router.py`
+  - Default reminders-read command path now uses `event` first, with `remindctl` fallback, while preserving injected `reminder_reader` behavior for tests/callers.
+- `/Users/clawdolf/.hermes/sebos/tests/test_reminders.py`
+  - Updated collection tests to prove event-primary behavior and fallback to remindctl/JXA.
+- `/Users/clawdolf/.hermes/sebos/tests/test_reminder_writer.py`
+  - Added event-primary delete list/delete test and preserved legacy remindctl fallback tests.
+- `/Users/clawdolf/.hermes/hermes-agent/MIGRATION_HANDOFF.md`
+  - This handoff entry.
+
+Verification run:
+```bash
+cd /Users/clawdolf/.hermes/sebos
+python3 -m pytest tests/test_reminders.py tests/test_reminder_writer.py tests/test_command_router.py -q
+# 73 passed in 0.40s
+
+python3 -m pytest tests/test_command_router.py tests/test_reminders.py tests/test_reminder_writer.py tests/test_note_reminder.py tests/test_calendars.py tests/test_journal_pending_prompt_cli.py -q
+# 88 passed in 2.45s
+
+python3 -m py_compile lib/reminders.py lib/reminder_writer.py lib/command_router.py tests/test_reminders.py tests/test_reminder_writer.py
+# passed, no output
+
+python3 -m pytest -q
+# 546 passed in 36.53s
+```
+
+Read-only live provider check:
+```bash
+cd /Users/clawdolf/.hermes/sebos
+python3 - <<'PY'
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from lib import reminders
+with TemporaryDirectory() as td:
+    result = reminders.collect(Path(td) / 'sebos.db')
+print({'status': result['status'], 'sources': result['sources'], 'counts': result['counts']})
+PY
+# {'status': 'ok', 'sources': {'today': 'event', 'overdue': 'event', 'week': 'event'}, 'counts': {'today': 2, 'overdue': 0, 'week': 6}}
+```
+
+Behavior migrated:
+- Calendar reads/writes were already event-primary.
+- Reminder writes were already event-primary.
+- Reminder collection/read paths are now event-primary.
+- Command-router reminders-read fallback path is now event-primary.
+- Reminder delete matching and delete command execution are now event-primary.
+- `remindctl` remains fallback for older or denied EventKit/event environments.
+
+Rollback notes:
+- Revert changes to `lib/reminders.py`, `lib/reminder_writer.py`, `lib/command_router.py`, `tests/test_reminders.py`, and `tests/test_reminder_writer.py`.
+- This returns Reminder read/match/delete paths to remindctl-primary behavior.
+- No Apple data was changed by this unit, so runtime rollback is code-only.
+
+Remaining debt:
+- Provider/tool names still appear in sebOS structured outputs/tests/debug details; keep them out of Photon/Athena user-facing copy.
+- `remindctl` fallback remains intentionally for rollback and compatibility.
+- Handoff docs are dirty in Hermes and runtime provider-order code is dirty in sebOS; commit packaging needs separate approval.
+
+Next recommended single unit:
+- Stage and commit only the sebOS provider-order runtime package: `lib/reminders.py`, `lib/reminder_writer.py`, `lib/command_router.py`, `tests/test_reminders.py`, and `tests/test_reminder_writer.py`. Keep Hermes `MIGRATION_HANDOFF.md` as a separate docs commit.
+
+Blockers or decisions needed from Seb:
+- Approval required before staging/committing the sebOS provider-order package, committing the Hermes handoff doc, pushing, opening PRs, restarting gateway, live smoke tests, launchd edits, or any Apple-data mutation.
