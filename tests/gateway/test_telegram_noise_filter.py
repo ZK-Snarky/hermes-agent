@@ -1,10 +1,37 @@
 """Telegram-specific gateway filtering for noisy status/error output."""
 
+import pytest
+
 from gateway.config import Platform
+from gateway.platform_registry import PlatformEntry, platform_registry
 from gateway.run import (
     _prepare_gateway_status_message,
     _sanitize_gateway_final_response,
 )
+from plugins.platforms.photon.adapter import _outbound_sanitize as _photon_outbound_sanitize
+
+
+@pytest.fixture
+def photon_platform_registered():
+    """Register the real Photon platform entry (clean_inbox + sanitizer).
+
+    Photon's inbox hygiene and outbound shaping now flow through declared
+    PlatformEntry capabilities, so the gateway helpers only suppress/shape when
+    the platform is registered — exactly as at runtime after plugin load.
+    """
+    entry = PlatformEntry(
+        name="photon",
+        label="iMessage via Photon",
+        adapter_factory=lambda cfg: None,
+        check_fn=lambda: True,
+        clean_inbox=True,
+        outbound_sanitize_fn=_photon_outbound_sanitize,
+    )
+    platform_registry.register(entry)
+    try:
+        yield entry
+    finally:
+        platform_registry.unregister("photon")
 
 
 def test_telegram_status_suppresses_auxiliary_and_retry_noise():
@@ -31,7 +58,7 @@ def test_non_telegram_status_is_unchanged():
     assert _prepare_gateway_status_message("local", "lifecycle", message) == message
 
 
-def test_photon_status_is_always_suppressed():
+def test_photon_status_is_always_suppressed(photon_platform_registered):
     """iMessage should never receive ops/status/tool/compression notices."""
     noisy = "ℹ Codex gpt-5.5 caps context at 272K, so auto-compaction was raised to 85%"
 
@@ -90,7 +117,7 @@ def test_telegram_final_response_keeps_normal_answers():
     assert _sanitize_gateway_final_response(Platform.TELEGRAM, answer) == answer
 
 
-def test_photon_final_response_suppresses_internal_notices():
+def test_photon_final_response_suppresses_internal_notices(photon_platform_registered):
     raw = (
         "ℹ Codex gpt-5.5 caps context at 272K, so auto-compaction was raised "
         "to 85%. Opt back out: hermes config set compression.codex_gpt55_autoraise false"
@@ -99,5 +126,12 @@ def test_photon_final_response_suppresses_internal_notices():
     assert _sanitize_gateway_final_response("photon", raw) == "Received."
 
 
-def test_photon_final_response_keeps_normal_answers():
+def test_photon_final_response_keeps_normal_answers(photon_platform_registered):
     assert _sanitize_gateway_final_response("photon", "Received message.") == "Received message."
+
+
+def test_photon_final_response_redacts_secrets(photon_platform_registered):
+    raw = "Here is the key sk-ABCDEFGHIJKLMNOP1234567890 you wanted."
+    sanitized = _sanitize_gateway_final_response("photon", raw)
+    assert "[REDACTED]" in sanitized
+    assert "sk-ABCDEFGHIJKLMNOP1234567890" not in sanitized

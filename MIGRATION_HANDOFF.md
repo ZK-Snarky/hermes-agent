@@ -1594,3 +1594,53 @@ Next recommended single unit:
 
 Blockers or decisions needed from Seb:
 - Approval required before staging/committing this package, pushing, opening PRs, restarting gateway, editing launchd, live sends, or mutating any external system.
+
+## Unit 21 generic platform capability hooks / outbound sanitizer package — 2026-06-21 22:24 MDT
+
+Scope executed:
+- Packaged only generic `PlatformEntry` capability hooks and shared outbound sanitization.
+- Did not touch Athena goals injection, session/Photon guard fixes, sebOS, `hermes-sebos`, Gab, live config, gateway process, launchd, or external systems.
+
+Files in package:
+- `/Users/clawdolf/.hermes/hermes-agent/gateway/platform_registry.py`
+  - Adds `PlatformEntry.clean_inbox` and `PlatformEntry.outbound_sanitize_fn` as generic platform capabilities.
+- `/Users/clawdolf/.hermes/hermes-agent/gateway/outbound_sanitize.py`
+  - Extracts reusable user-facing secret redaction helpers from `gateway/run.py` so platform sanitizers can use them without importing gateway runtime.
+- `/Users/clawdolf/.hermes/hermes-agent/gateway/run.py`
+  - Reads declared platform capabilities instead of hardcoded Photon branches for status suppression, outbound sanitize, and home-channel nag suppression.
+  - Keeps Telegram provider-error handling intact.
+- `/Users/clawdolf/.hermes/hermes-agent/tests/gateway/test_platform_capabilities.py`
+  - Adds synthetic-platform tests proving the capability hooks are generic and default-off.
+- `/Users/clawdolf/.hermes/hermes-agent/tests/gateway/test_telegram_noise_filter.py`
+  - Updates Photon expectations to register the real Photon capability entry and keeps Telegram/noise behavior covered.
+- `/Users/clawdolf/.hermes/hermes-agent/MIGRATION_HANDOFF.md`
+  - This handoff entry.
+
+Verification run before commit:
+```bash
+cd /Users/clawdolf/.hermes/hermes-agent
+python -m pytest tests/gateway/test_platform_capabilities.py tests/gateway/test_telegram_noise_filter.py -q -o 'addopts='
+# 15 passed in 1.03s
+
+python -m py_compile gateway/platform_registry.py gateway/run.py gateway/outbound_sanitize.py tests/gateway/test_platform_capabilities.py tests/gateway/test_telegram_noise_filter.py
+# passed, no output
+```
+
+Classification:
+- Generic upstreamable Hermes core: platform capability fields, registry lookup helper, and gateway use of declared capabilities.
+- Generic shared utility: outbound secret redaction module.
+- Related tests only: synthetic capability tests plus existing Telegram/Photon noise-filter tests updated to exercise the new capability path.
+
+Rollback notes:
+- Revert this commit to restore the previous hardcoded Photon branches in `gateway/run.py` and inline gateway secret redaction.
+- Photon adapter already declares these capabilities in its committed platform registration; without this package those arguments require matching `PlatformEntry` fields.
+
+Remaining dirty Hermes work after this package:
+- Athena goals injection: `agent/agent_init.py`, `agent/prompt_builder.py`, `agent/system_prompt.py`, `tests/agent/test_prompt_builder.py`, `tests/agent/test_system_prompt.py`.
+- Session/Photon guard fixes: `gateway/session.py`, `tests/gateway/test_session.py`, `tests/plugins/platforms/photon/test_shared_cloud_guard.py`.
+
+Next recommended single unit:
+- Package the session/Photon guard fixes separately, or run a review-only pass first because that work affects request/session safety paths.
+
+Blockers or decisions needed from Seb:
+- Approval required before staging/committing remaining Athena goals or session/Photon guard packages, pushing, opening PRs, restarting gateway, editing launchd, live sends, or mutating external systems.

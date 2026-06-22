@@ -97,6 +97,24 @@ class PlatformEntry:
     # If True, session descriptions redact PII (phone numbers, etc.)
     pii_safe: bool = False
 
+    # ── Inbox hygiene ──
+    # If True, this platform is a clean personal inbox, not an ops console:
+    # the gateway suppresses status/progress/lifecycle chatter (compression
+    # notices, retry messages, tool progress) and never nags it to become a
+    # cron/cross-platform home channel.  Final assistant replies still send.
+    clean_inbox: bool = False
+
+    # ── Outbound shaping ──
+    # Optional: transform a final assistant reply just before it is sent.
+    # Signature: (text: str) -> str.  Lets a platform own its own outbound
+    # rules (e.g. suppress internal-notice text, map provider errors to a
+    # short user-safe reply) instead of forcing core to hardcode per-platform
+    # branches.  Shared secret redaction lives in
+    # ``gateway.outbound_sanitize.redact_user_facing_secrets`` so hooks can
+    # call it without importing the gateway runtime.  If None, core applies
+    # its default handling.
+    outbound_sanitize_fn: Optional[Callable[[str], str]] = None
+
     # ── Display ──
     # Emoji for CLI/gateway display (e.g. "💬")
     emoji: str = "🔌"

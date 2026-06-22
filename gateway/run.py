@@ -126,13 +126,8 @@ _GATEWAY_RATE_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 
-_GATEWAY_SECRET_PATTERNS = (
-    re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{12,}\b"),
-    re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{20,}\b"),
-    re.compile(r"\bhf_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"),
-    re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._\-]{20,}\b"),
+from gateway.outbound_sanitize import (
+    redact_user_facing_secrets as _redact_gateway_user_facing_secrets,
 )
 
 
@@ -287,14 +282,6 @@ def _gateway_loop_exception_handler(
     loop.default_exception_handler(context)
 
 
-def _redact_gateway_user_facing_secrets(text: str) -> str:
-    """Best-effort secret redaction before text can leave the gateway."""
-    redacted = str(text or "")
-    for pattern in _GATEWAY_SECRET_PATTERNS:
-        redacted = pattern.sub(lambda m: (m.group(1) if m.lastindex else "") + "[REDACTED]", redacted)
-    return redacted
-
-
 def _gateway_provider_error_reply(text: str) -> str:
     """Map raw provider/API errors to a short user-safe Telegram reply."""
     if _GATEWAY_AUTH_ERROR_RE.search(text):
@@ -353,31 +340,44 @@ def _looks_like_gateway_provider_error(text: str) -> bool:
     return bool(_GATEWAY_PROVIDER_ERROR_SHAPE_RE.search(body))
 
 
-_PHOTON_INTERNAL_NOTICE_RE = re.compile(
-    r"(?:Codex gpt-5\.5 caps context|auto-compaction was raised|hermes config set|tool call|tool_call|function call|status_callback|context compression)",
-    re.IGNORECASE,
-)
+def _gateway_platform_entry(platform: Any):
+    """Return the registered PlatformEntry for a platform value, or None.
+
+    Used to read declared platform capabilities (``clean_inbox``,
+    ``outbound_sanitize_fn``) instead of hardcoding per-platform branches.
+    """
+    key = _gateway_platform_value(platform)
+    if not key:
+        return None
+    try:
+        from gateway.platform_registry import platform_registry
+
+        return platform_registry.get(key)
+    except Exception:
+        return None
 
 
 def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
     """Sanitize final gateway replies before sending them to high-noise chats.
 
-    Telegram is Bob's mobile inbox, so it should receive concise, safe provider
-    failure categories instead of raw HTTP bodies, request IDs, or policy text.
-    Other platforms keep the existing behaviour for now.
+    A platform may declare its own ``outbound_sanitize_fn`` to own its outbound
+    rules (e.g. suppress internal-notice text). Telegram keeps its built-in
+    provider-error categorization. All other platforms are unchanged.
     """
     if not text:
         return text
     platform_key = _gateway_platform_value(platform)
-    if platform_key == "photon":
-        redacted = _redact_gateway_user_facing_secrets(str(text))
-        if _PHOTON_INTERNAL_NOTICE_RE.search(redacted):
+    entry = _gateway_platform_entry(platform)
+    if entry is not None and entry.outbound_sanitize_fn is not None:
+        try:
+            return entry.outbound_sanitize_fn(str(text))
+        except Exception:
             logger.warning(
-                "suppressed internal Photon final response: %s",
-                redacted[:160],
+                "platform '%s' outbound_sanitize_fn failed; redacting and sending",
+                platform_key,
+                exc_info=True,
             )
-            return "Received."
-        return redacted
+            return _redact_gateway_user_facing_secrets(str(text))
     if platform_key != "telegram":
         return text
 
@@ -393,10 +393,11 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
     if not text:
         return None
     platform_key = _gateway_platform_value(platform)
-    if platform_key == "photon":
-        # iMessage is a clean personal inbox, not an ops console. Never push
-        # compression notices, retry chatter, tool progress, or lifecycle noise
-        # through Photon; final assistant/sebOS replies use the normal send path.
+    entry = _gateway_platform_entry(platform)
+    if entry is not None and entry.clean_inbox:
+        # Clean personal inbox, not an ops console. Never push compression
+        # notices, retry chatter, tool progress, or lifecycle noise; final
+        # assistant/sebOS replies use the normal send path.
         return None
     if platform_key != "telegram":
         return text
@@ -9360,11 +9361,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         
         # One-time prompt if no home channel is set for this platform
         # Skip for webhooks - they deliver directly to configured targets (github_comment, etc.)
-        # Skip Photon/iMessage: it is Seb's clean personal inbox, and Photon
-        # should not be asked to become a cron/cross-platform home channel.
+        # Skip clean-inbox platforms (e.g. iMessage/Photon): a personal inbox
+        # should not be nagged to become a cron/cross-platform home channel.
         if not history and source.platform and source.platform != Platform.LOCAL and source.platform != Platform.WEBHOOK:
             platform_name = source.platform.value
-            if platform_name == "photon":
+            _home_entry = _gateway_platform_entry(source.platform)
+            if _home_entry is not None and _home_entry.clean_inbox:
                 env_key = None
             else:
                 env_key = _home_target_env_var(platform_name)
