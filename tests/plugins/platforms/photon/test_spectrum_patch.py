@@ -17,6 +17,14 @@ def test_sidecar_applies_spectrum_patch_before_importing_sdk() -> None:
     assert index.index("patchSpectrumTs();") < index.index('await import("spectrum-ts")')
 
 
+def test_sidecar_resolves_phone_targets_through_imessage_user_first() -> None:
+    """Docs require im.user(phone) before im.space.create(user) for DMs."""
+    index = Path("plugins/platforms/photon/sidecar/index.mjs").read_text(encoding="utf-8")
+    assert "const user = await im.user(phoneTarget);" in index
+    assert "space = await im.space.create(user);" in index
+    assert "space = await im.space.create(phoneTarget);" not in index
+
+
 def test_spectrum_patch_preserves_text_when_single_attachment(tmp_path: Path) -> None:
     """The sidecar dependency patch must turn text+one attachment into group content."""
     dist = tmp_path / "node_modules" / "spectrum-ts" / "dist"
