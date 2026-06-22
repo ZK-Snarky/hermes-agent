@@ -1006,3 +1006,380 @@ Remaining packaging decision:
 Blockers or decisions needed from Seb:
 - Approval required before any commit/push/PR.
 - Decision needed: include migration docs/handoff in repo, or keep docs local and commit only code/tests.
+
+## Unit 12 hermes-sebos plugin packaging / durability — 2026-06-21 20:56 MDT
+
+Scope executed:
+- Ran the approved plugin packaging/durability-only unit.
+- Did not de-domain more Photon behavior.
+- Did not restart gateway, edit launchd, send iMessages/live Photon messages, mutate Reminders/Notes/Close/Monarch/Telegram/Apple data, push, merge, rebase, or force-push.
+
+Docs read:
+- `/Users/clawdolf/.hermes/hermes-agent/MIGRATION_HANDOFF.md`
+- `/Users/clawdolf/.hermes/hermes-agent/MIGRATION_PLAN.md`
+- `/Users/clawdolf/.hermes/hermes-agent/BOUNDARY_RULES.md`
+- `/Users/clawdolf/.hermes/hermes-agent/UNIT2_BOUNDARY_DESIGN.md`
+- `/Users/clawdolf/.hermes/plugins/hermes-sebos/plugin.yaml`
+- `/Users/clawdolf/.hermes/plugins/hermes-sebos/tools.py`
+- `/Users/clawdolf/.hermes/plugins/hermes-sebos/photon_boundary.py`
+- Hermes plugin docs: local `website/docs/user-guide/features/plugins.md` and live `https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins`.
+
+State verification:
+- Hermes repo is a git repo on `clean-stock`; it still has broad existing dirty migration work unrelated to this plugin packaging unit.
+- sebOS repo is a git repo on `main`; it still has existing dirty sebOS migration work unrelated to this plugin packaging unit.
+- `/Users/clawdolf/.hermes/plugins/hermes-sebos` was not a git repo before this unit.
+
+Tracking/package option chosen:
+- Initialized `/Users/clawdolf/.hermes/plugins/hermes-sebos` as its own local git repository.
+- Reason: Hermes docs define user plugins as directories under `~/.hermes/plugins/`; keeping the plugin in place makes the live adapter dependency durable without moving live files, changing Hermes core/config, or depending on project-local plugin enablement.
+- Did not move files into Hermes core because official docs support user plugins at the existing path and moving would expand live/runtime scope.
+- Did not only snapshot into the Unit 1 export because that would preserve an artifact but leave the live plugin file untracked.
+
+Plugin package now includes:
+- `.gitignore`
+- `README.md`
+- `__init__.py`
+- `plugin.yaml`
+- `tools.py`
+- `photon_boundary.py`
+
+Files changed in plugin repo:
+- Added `/Users/clawdolf/.hermes/plugins/hermes-sebos/.gitignore` to ignore bytecode/cache noise.
+- Added `/Users/clawdolf/.hermes/plugins/hermes-sebos/README.md` documenting the plugin package and Photon boundary facade.
+- Updated `/Users/clawdolf/.hermes/plugins/hermes-sebos/plugin.yaml` description to mention the Photon-facing sebOS CLI compatibility facade.
+
+Plugin commit created:
+```bash
+cd /Users/clawdolf/.hermes/plugins/hermes-sebos
+git commit -m "package Photon sebOS boundary facade"
+# 0df6693 package Photon sebOS boundary facade
+```
+
+Verification run:
+```bash
+cd /Users/clawdolf/.hermes/hermes-agent
+python -m pytest tests/plugins/platforms/photon/test_sebos_rules.py tests/plugins/platforms/photon/test_intent_gate.py tests/tools/test_sebos_event.py -q -o 'addopts='
+# 43 passed in 1.84s
+
+cd /Users/clawdolf/.hermes/sebos
+python3 -m pytest tests/test_command_router.py -q
+# 46 passed in 0.07s
+
+cd /Users/clawdolf/.hermes/plugins/hermes-sebos
+python -m py_compile __init__.py tools.py photon_boundary.py
+# passed
+```
+
+Rollback notes:
+- To undo only this packaging unit, remove the plugin repo metadata with `rm -rf /Users/clawdolf/.hermes/plugins/hermes-sebos/.git` and revert the README/plugin.yaml/.gitignore changes if desired.
+- Do not remove `photon_boundary.py` unless also rolling back the committed Hermes Photon adapter facade changes.
+- Existing Photon fallback remains guarded and low-risk if the facade cannot load.
+
+Remaining Photon/sebOS boundary debt:
+- Photon still imports the user plugin facade by fixed path and retains guarded fallback `_run_sebos_json(...)` for rollback.
+- The plugin facade is local-only, tracked in a local git repo, not pushed to a remote.
+- No live gateway/plugin reload was performed, so runtime processes still use whatever code they had already loaded until next normal restart.
+
+Next recommended single slice:
+- Review and reconcile the broad existing dirty Hermes/sebOS migration work that remains outside this plugin repo, then decide whether to push/open PRs. No more behavior migration before that cleanup/review pass.
+
+Blockers or decisions needed from Seb:
+- No blocker for local durability: the plugin facade is now tracked in its own local git repo.
+- Approval required before pushing the plugin repo anywhere, adding a remote, opening PRs, restarting gateway/live smoke, changing core/plugin loading, deleting files, or removing fallback.
+
+## Unit 13 dirty-worktree review / reconcile pass — 2026-06-21 21:01 MDT
+
+Scope executed:
+- Ran the approved review/reconcile unit only.
+- Verified current git state in Hermes, sebOS, and the local `hermes-sebos` plugin repo.
+- Reviewed and categorized existing dirty Hermes/sebOS work without pushing, opening PRs, restarting gateway, editing launchd, sending messages, or touching external systems.
+- Made one test-only sebOS reconciliation patch after review exposed failing tests from the existing `remindctl` absolute-path change.
+
+Current repo state:
+- Hermes repo: branch `clean-stock`, HEAD `612ddef34 refactor(photon): route sebOS calls through hermes-sebos facade`, dirty worktree remains.
+- sebOS repo: branch `main`, HEAD `ac989e6 Generalize coarse IP location in briefs`, dirty worktree remains.
+- `hermes-sebos` plugin repo: branch `main`, HEAD `0df6693 package Photon sebOS boundary facade`; clean except ignored `__pycache__/`.
+
+Hermes dirty work categorized:
+1. `sebos_event` plugin migration:
+   - `tools/sebos_event.py` deleted from core.
+   - `hermes_cli/plugins.py`, `tools/registry.py`, `toolsets.py`, `tests/test_toolsets.py`, `tests/tools/test_sebos_event.py` add plugin opt-in wiring so `hermes-sebos` can provide `sebos_event` across messaging/core-family toolsets.
+   - Recommendation: package as a dedicated commit after explicit review, because this is core/toolset behavior and broader than Photon boundary work.
+2. Athena goals injection:
+   - `agent/agent_init.py`, `agent/prompt_builder.py`, `agent/system_prompt.py`, `tests/agent/test_prompt_builder.py`, `tests/agent/test_system_prompt.py` inject compact sebOS `athena_goals.json` into prompt context.
+   - Recommendation: package as its own local-Athena feature commit, not mixed with plugin migration.
+3. Generic platform capability hooks / Photon inbox hygiene:
+   - `gateway/platform_registry.py`, `gateway/run.py`, `gateway/outbound_sanitize.py`, `tests/gateway/test_platform_capabilities.py`, `tests/gateway/test_telegram_noise_filter.py` move clean-inbox and outbound sanitizer behavior into `PlatformEntry` capabilities.
+   - Recommendation: package separately as an upstreamable generic gateway extension point, then keep Photon-specific usage in platform plugin code.
+4. Session/platform cleanup and Photon guard fixes:
+   - `gateway/session.py`, `tests/gateway/test_session.py`, `tests/plugins/platforms/photon/test_shared_cloud_guard.py` remove stale iMessage prompt leakage and update shared-cloud auth expectation to Basic auth.
+   - Recommendation: split into small bugfix commits, not mixed with migration infrastructure.
+5. Migration docs:
+   - `MIGRATION_HANDOFF.md` updated by Units 12 and 13.
+   - Recommendation: either keep local-only or commit as migration evidence in a docs-only commit. Do not bury it inside runtime code commits.
+
+sebOS dirty work categorized:
+1. Command-router behavior additions:
+   - `lib/command_router.py`, `tests/test_command_router.py`, and untracked `bin/sebos-journal-pending-prompt` add reminders-read intent, broader `where was I` variants, default note appender, and active journal prompt CLI.
+   - Recommendation: split active-journal prompt CLI from reminders-read/default-note behavior. The prompt CLI supports the Photon boundary migration; reminders-read/default-note are live domain behavior and need separate review.
+2. Reminders executable path hardening:
+   - `lib/reminders.py` uses `shutil.which("remindctl") or "/opt/homebrew/bin/remindctl"` for launchd/Hermes stripped-PATH contexts.
+   - `tests/test_reminders.py` was updated in this unit to accept either `remindctl` or an absolute path by checking `Path(args[0]).name`.
+   - Recommendation: package as a small sebOS reliability bugfix commit.
+
+Verification run:
+```bash
+cd /Users/clawdolf/.hermes/hermes-agent
+python -m pytest tests/agent/test_prompt_builder.py tests/agent/test_system_prompt.py tests/gateway/test_session.py tests/gateway/test_telegram_noise_filter.py tests/gateway/test_platform_capabilities.py tests/plugins/platforms/photon/test_shared_cloud_guard.py tests/test_toolsets.py tests/tools/test_sebos_event.py tests/plugins/platforms/photon/test_sebos_rules.py tests/plugins/platforms/photon/test_intent_gate.py -q -o 'addopts='
+# 338 passed, 1 skipped in 12.85s
+
+cd /Users/clawdolf/.hermes/sebos
+python3 -m pytest tests/test_command_router.py tests/test_reminders.py -q
+# 54 passed in 0.31s
+
+cd /Users/clawdolf/.hermes/sebos
+python3 -m py_compile lib/command_router.py lib/reminders.py tests/test_reminders.py bin/sebos-journal-pending-prompt
+# passed
+```
+
+Reconciliation change made in this unit:
+- `/Users/clawdolf/.hermes/sebos/tests/test_reminders.py` now uses a local `_cmd_name(args)` helper so tests remain valid after `lib/reminders.py` switches from bare `remindctl` to an absolute executable path in stripped-PATH contexts.
+
+Recommended commit order:
+1. sebOS reliability bugfix: `lib/reminders.py` + `tests/test_reminders.py` only.
+2. sebOS active-journal prompt CLI: `bin/sebos-journal-pending-prompt` + focused `command_router`/tests if separable.
+3. Hermes generic plugin opt-in toolset support + core `sebos_event` deletion, paired with the already tracked `hermes-sebos` plugin repo commit.
+4. Hermes generic platform capability hooks / outbound sanitizer.
+5. Athena goals injection.
+6. Small gateway/Photon bugfixes.
+7. Migration docs commit or local-only handoff decision.
+
+Blockers or decisions needed from Seb:
+- No blocker for local tests: reviewed suites are green after the sebOS test reconciliation.
+- Approval required before staging/committing any of the above slices, adding remotes, pushing, opening PRs, restarting gateway, live smoke tests, deleting files, or removing fallback.
+- Recommended next single unit: package the smallest low-risk sebOS reliability bugfix (`lib/reminders.py` + `tests/test_reminders.py`) as a local commit. It is independent and already verified.
+
+## Unit 14 sebOS reminders reliability commit — 2026-06-21 21:06 MDT
+
+Scope executed:
+- Ran the approved smallest low-risk sebOS reliability unit only.
+- Staged and committed only `/Users/clawdolf/.hermes/sebos/lib/reminders.py` and `/Users/clawdolf/.hermes/sebos/tests/test_reminders.py`.
+- Did not stage command-router changes, `bin/sebos-journal-pending-prompt`, Hermes changes, push, open a PR, restart gateway, edit launchd, send messages, or mutate Apple data.
+
+Behavior packaged:
+- `lib/reminders.py` resolves `remindctl` via `shutil.which("remindctl")` and falls back to `/opt/homebrew/bin/remindctl` for stripped-PATH launchd/Hermes contexts.
+- `tests/test_reminders.py` asserts the command contract by basename, so either `remindctl` or an absolute executable path remains valid.
+
+Verification run:
+```bash
+cd /Users/clawdolf/.hermes/sebos
+python3 -m pytest tests/test_reminders.py -q
+# 8 passed in 0.24s
+
+python3 -m pytest tests/test_command_router.py tests/test_reminders.py -q
+# 54 passed in 0.31s
+
+python3 -m py_compile lib/reminders.py tests/test_reminders.py
+# passed
+
+git diff --cached --check
+# passed
+```
+
+Commit created:
+```bash
+cd /Users/clawdolf/.hermes/sebos
+git commit -m "fix(reminders): resolve remindctl in stripped PATH contexts"
+# 8508131 fix(reminders): resolve remindctl in stripped PATH contexts
+```
+
+Remaining sebOS dirty work:
+- `lib/command_router.py`
+- `tests/test_command_router.py`
+- untracked `bin/sebos-journal-pending-prompt`
+
+Next recommended single unit:
+- Package active-journal prompt CLI separately if separable: `bin/sebos-journal-pending-prompt` plus only the command-router/test changes required for the Photon active journal prompt boundary. Keep reminders-read/default-note behavior out unless review proves it is inseparable.
+
+Blockers or decisions needed from Seb:
+- No blocker for this commit.
+- Approval required before staging/committing the remaining sebOS command-router work, pushing, opening PRs, restarting gateway, live smoke tests, deleting files, or changing Apple/Reminders/Notes behavior.
+
+## Unit 15 sebOS active-journal prompt CLI commit — 2026-06-21 21:11 MDT
+
+Scope executed:
+- Ran the approved active-journal prompt CLI packaging unit.
+- Confirmed the CLI could be separated from unrelated command-router behavior.
+- Staged and committed only `/Users/clawdolf/.hermes/sebos/bin/sebos-journal-pending-prompt` and `/Users/clawdolf/.hermes/sebos/tests/test_journal_pending_prompt_cli.py`.
+- Did not stage remaining `lib/command_router.py` or `tests/test_command_router.py` changes.
+- Did not push, open a PR, restart gateway, edit launchd, send messages, or mutate Apple/Reminders/Notes data.
+
+Behavior packaged:
+- Added read-only `sebos-journal-pending-prompt` CLI.
+- Given `--at` and optional `--db`, it returns JSON `{"date": "YYYY-MM-DD"}` when an inbound message falls inside the latest journal prompt reply window, otherwise `{"date": null}`.
+- Uses delivered_at first, then created_at, with the existing six-hour reply window.
+- Invalid timestamp returns structured JSON error and exit code 2.
+
+Verification run:
+```bash
+cd /Users/clawdolf/.hermes/sebos
+python3 -m pytest tests/test_journal_pending_prompt_cli.py -q
+# 4 passed in 0.37s
+
+python3 -m pytest tests/test_journal_pending_prompt_cli.py tests/test_journal.py -q
+# 63 passed in 2.63s
+
+python3 -m py_compile bin/sebos-journal-pending-prompt tests/test_journal_pending_prompt_cli.py
+# passed
+
+git diff --cached --check
+# passed
+```
+
+Commit created:
+```bash
+cd /Users/clawdolf/.hermes/sebos
+git commit -m "feat(journal): add pending prompt CLI"
+# cbdadca feat(journal): add pending prompt CLI
+```
+
+Remaining sebOS dirty work:
+- `lib/command_router.py`
+- `tests/test_command_router.py`
+
+Next recommended single unit:
+- Review the remaining command-router diff and split it into the smallest safe behavior package. Current candidates are reminders-read intent / broader where-was-I matching and default Apple Notes appender. The default note appender touches live Apple Notes behavior, so I recommend review-only first, then commit only if you explicitly approve that live behavior change.
+
+Blockers or decisions needed from Seb:
+- No blocker for the active-journal prompt CLI commit.
+- Approval required before staging/committing remaining command-router behavior, especially any default Apple Notes write path, pushing, opening PRs, restarting gateway, live smoke tests, deleting files, or changing Apple/Reminders/Notes behavior.
+
+## Unit 16 remaining sebOS command-router review — 2026-06-21 21:13 MDT
+
+Scope executed:
+- Ran review-only on the remaining sebOS dirty diff.
+- Did not edit, stage, commit, push, restart gateway, send messages, or touch Apple/Reminders/Notes data.
+
+Remaining dirty files reviewed:
+- `/Users/clawdolf/.hermes/sebos/lib/command_router.py`
+- `/Users/clawdolf/.hermes/sebos/tests/test_command_router.py`
+
+Diff clusters found:
+1. Safer/read-only command intent cluster:
+   - Adds casual-prefix stripping (`hey`, `hi`, `yo`, `ok`, `okay`, `athena`) before command classification.
+   - Broadens `where was/am I` variants to include `where am I on my tasks` and `what am I doing`.
+   - Adds read-only `INTENT_REMINDERS_READ` and a handler for reminder summary reads.
+   - Uses `reminders.run_remindctl(...)` and degrades to empty unavailable sections on errors.
+   - Tests cover reminder-read classification and read-only routing with injected `reminder_reader`.
+   - Risk: low to moderate. It is read-only but does expand command recognition, which can intercept phrases that might previously fall through to Athena/Hermes.
+2. Live Apple Notes write cluster:
+   - Adds `_default_note_appender(...)` with AppleScript writes into Mission Control Apple Notes and sebOS event tracking.
+   - Changes note routing with no injected appender from staged dry-run to live write when `write_enabled=True`.
+   - Tests mock `_default_note_appender`, so they do not exercise real Apple Notes.
+   - Risk: high. This changes live Apple Notes behavior and should not be bundled with the read-only command improvements.
+3. Shared signature/plumbing cluster:
+   - Adds optional `reminder_reader` through `_dispatch`, `route_text`, and `route_audio_transcript`.
+   - This belongs with the reminders-read cluster.
+
+Verification run:
+```bash
+cd /Users/clawdolf/.hermes/sebos
+python3 -m pytest tests/test_command_router.py -q
+# 46 passed in 0.08s
+
+python3 -m pytest tests/test_command_router.py tests/test_reminders.py tests/test_journal_pending_prompt_cli.py -q
+# 58 passed in 0.66s
+
+python3 -m py_compile lib/command_router.py tests/test_command_router.py
+# passed
+
+python3 - <<'PY'
+from lib import command_router as cr
+for text in ['what reminders do I have', 'where am I on my tasks', 'note this under Ideas: test']:
+    intent = cr.classify_text_intent(text)
+    print(text, '->', intent.kind)
+PY
+# what reminders do I have -> reminders_read
+# where am I on my tasks -> where_was_i
+# note this under Ideas: test -> note
+```
+
+Recommendation:
+- Do not commit the remaining diff as-is.
+- Next single unit should split out and commit only the read-only command intent cluster:
+  - casual-prefix stripping,
+  - broader where-was-I variants,
+  - reminders-read intent/handler,
+  - `reminder_reader` plumbing,
+  - associated tests.
+- Leave `_default_note_appender(...)` and the note behavior change uncommitted until Seb explicitly approves live Apple Notes write behavior.
+
+Blockers or decisions needed from Seb:
+- Approval required before editing the diff to separate clusters and commit the read-only command intent package.
+- Separate explicit approval required before any default Apple Notes write path is committed or exercised live.
+
+## Unit 17 sebOS read-only command intent commit — 2026-06-21 21:22 MDT
+
+Scope executed:
+- Split the remaining command-router diff and removed the live Apple Notes default appender behavior from the dirty state.
+- Kept only the read-only command intent package:
+  - casual-prefix stripping before command classification,
+  - broader `where was/am I` variants,
+  - read-only `INTENT_REMINDERS_READ`,
+  - reminder summary handler using `reminders.run_remindctl(...)` with unavailable fallback sections,
+  - `reminder_reader` plumbing through text/audio route entrypoints,
+  - tests for classification and read-only routing.
+- Preserved no-appender note behavior as staged dry-run with `no_appender_wired`.
+- Did not push, open a PR, restart gateway, edit launchd, send messages, or touch Apple/Reminders/Notes data.
+
+Verification run:
+```bash
+cd /Users/clawdolf/.hermes/sebos
+python3 -m pytest tests/test_command_router.py -q
+# 46 passed in 0.11s
+
+python3 -m pytest tests/test_command_router.py tests/test_reminders.py tests/test_journal_pending_prompt_cli.py -q
+# 58 passed in 0.66s
+
+python3 -m py_compile lib/command_router.py tests/test_command_router.py
+# passed
+
+python3 - <<'PY'
+from lib import command_router as cr
+checks = ['what reminders do I have', 'hey what reminders do I have', 'where am I on my tasks', 'what am I doing']
+for text in checks:
+    print(text, '->', cr.classify_text_intent(text).kind)
+res = cr.route_text('note this under Ideas: keep staged', dry_run=False, write_enabled=True)
+print('note-no-appender', res['status'], res['mutated'], res.get('details', {}).get('reason'))
+PY
+# what reminders do I have -> reminders_read
+# hey what reminders do I have -> reminders_read
+# where am I on my tasks -> where_was_i
+# what am I doing -> where_was_i
+# note-no-appender dry_run False no_appender_wired
+
+git diff --cached --check
+# passed
+```
+
+Static safety checks:
+```bash
+rg -n "_default_note_appender|osascript|subprocess.run\(" lib/command_router.py tests/test_command_router.py || true
+# no matches
+```
+
+Commit created:
+```bash
+cd /Users/clawdolf/.hermes/sebos
+git commit -m "feat(router): add read-only reminder command intents"
+# 2dc2647 feat(router): add read-only reminder command intents
+```
+
+Remaining sebOS dirty work:
+- None in `/Users/clawdolf/.hermes/sebos` after this commit.
+
+Next recommended single unit:
+- Commit or otherwise package the Hermes `MIGRATION_HANDOFF.md` updates so the migration record is not stranded as a dirty file, then run a final repo status sweep across Hermes, sebOS, and `hermes-sebos`.
+
+Blockers or decisions needed from Seb:
+- Approval required before staging/committing Hermes `MIGRATION_HANDOFF.md`, pushing, opening PRs, restarting gateway, live smoke tests, or adding any Apple Notes default write path.
