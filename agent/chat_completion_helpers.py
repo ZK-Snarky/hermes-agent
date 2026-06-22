@@ -1901,30 +1901,18 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 _fire_first_delta()
                 agent._fire_reasoning_delta(reasoning_text)
 
-            # Accumulate text content — fire callback only when no tool calls
+            # Accumulate text content. If this chunk is associated with tool
+            # calls, keep the content in the final assistant message but do not
+            # stream it to user-facing platforms. Some providers emit planning
+            # text like "Need load skill..." in the same turn as tool calls;
+            # iMessage/Photon cannot retract streamed previews.
+            chunk_has_tool_delta = bool(delta and getattr(delta, "tool_calls", None))
             if delta and delta.content:
                 content_parts.append(delta.content)
-                if not tool_calls_acc:
+                if not tool_calls_acc and not chunk_has_tool_delta:
                     _fire_first_delta()
                     agent._fire_stream_delta(delta.content)
                     deltas_were_sent["yes"] = True
-                # Tool calls suppress regular content streaming (avoids
-                # displaying chatty "I'll use the tool..." text alongside
-                # tool calls).  But reasoning tags embedded in suppressed
-                # content should still reach the display — otherwise the
-                # reasoning box only appears as a post-response fallback,
-                # rendering it confusingly after the already-streamed
-                # response.  Route suppressed content through the stream
-                # delta callback so its tag extraction can fire the
-                # reasoning display.  Non-reasoning text is harmlessly
-                # suppressed by the CLI's _stream_delta when the stream
-                # box is already closed (tool boundary flush).
-                elif agent.stream_delta_callback:
-                    try:
-                        agent.stream_delta_callback(delta.content)
-                        agent._record_streamed_assistant_text(delta.content)
-                    except Exception:
-                        pass
 
             # Accumulate tool call deltas — notify display on first name
             if delta and delta.tool_calls:

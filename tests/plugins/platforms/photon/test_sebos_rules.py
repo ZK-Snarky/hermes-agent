@@ -24,6 +24,7 @@ def test_sebos_fallback_allowlist_is_exact() -> None:
     assert adapter_module._SEBOS_FALLBACK_COMMAND_ALLOWLIST == frozenset(
         {
             "sebos-route-command",
+            "sebos-board-query",
             "sebos-render-mission-control",
             "sebos-journal-pending-prompt",
             "sebos-add-reminder",
@@ -101,8 +102,8 @@ async def test_sebos_rules_board_routes_through_boundary_facade(monkeypatch: pyt
     boundary_calls = []
 
     class FakeBoundary:
-        async def render_mission_control(self, *, dry_run=True, timeout=25.0):
-            boundary_calls.append((dry_run, timeout))
+        async def board_query(self, command: str, *, timeout=25.0):
+            boundary_calls.append((command, timeout))
             return {"status": "ok", "body": "BOARD\n\nNOW\n- call lead\n\nNEXT\n- prep"}
 
     async def fake_run(*args, stdin=None, timeout=20.0):
@@ -127,7 +128,7 @@ async def test_sebos_rules_board_routes_through_boundary_facade(monkeypatch: pyt
     )
 
     assert result == "handled"
-    assert boundary_calls == [(True, 25.0)]
+    assert boundary_calls == [("snapshot", 25.0)]
     assert sent == [("space-1", "BOARD\n\nNOW\n- call lead\n\nNEXT\n- prep", "msg-1")]
 
 
@@ -138,7 +139,7 @@ async def test_sebos_rules_next_falls_back_to_old_mission_control_runner(monkeyp
 
     async def fake_run(*args, stdin=None, timeout=20.0):
         calls.append((args, stdin, timeout))
-        return {"status": "ok", "body": "BOARD\n\nNOW\n- call lead\n\nNEXT\n- prep\n- follow up"}
+        return {"status": "ok", "next": ["prep", "follow up"]}
 
     sent = []
 
@@ -159,8 +160,91 @@ async def test_sebos_rules_next_falls_back_to_old_mission_control_runner(monkeyp
     )
 
     assert result == "handled"
-    assert calls == [(("sebos-render-mission-control", "--dry-run", "--json"), None, 25.0)]
-    assert sent == [("space-1", "NEXT:\n- prep\n- follow up", "msg-1")]
+    assert calls == [(("sebos-board-query", "--json", "next"), None, 25.0)]
+    assert sent == [("space-1", "- prep\n- follow up", "msg-1")]
+
+
+@pytest.mark.asyncio
+async def test_sebos_rules_natural_agenda_routes_to_sebos_not_hermes(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _make_adapter(monkeypatch)
+    boundary_calls = []
+
+    class FakeBoundary:
+        async def route_text_command(self, text, *, write=True, db_path=None, channel="imessage", timeout=45.0):
+            boundary_calls.append((text, write, db_path, channel, timeout))
+            return {
+                "intent": "board_next",
+                "status": "ok",
+                "reply": "Falconnect: verify Re-Engage Safe to Export",
+            }
+
+    sent = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: FakeBoundary())
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+
+    result = await adapter._handle_sebos_rules(
+        space_id="space-1",
+        message_id="msg-1",
+        text="Whats next on the agenda for falconnect",
+        mtype=MessageType.TEXT,
+        media_urls=[],
+        media_types=[],
+    )
+
+    assert result == "handled"
+    assert boundary_calls == [
+        (
+            "Whats next on the agenda for falconnect",
+            True,
+            str(adapter_module._SEBOS_DB_PATH),
+            "imessage",
+            45.0,
+        )
+    ]
+    assert sent == [("space-1", "Falconnect: verify Re-Engage Safe to Export", "msg-1")]
+
+
+@pytest.mark.asyncio
+async def test_sebos_rules_calendar_and_location_route_to_board_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _make_adapter(monkeypatch)
+    calls = []
+
+    async def fake_route(text, *, write=True, db_path=None, channel="imessage", timeout=45.0):
+        calls.append(text)
+        if "calendar" in text.lower():
+            return {"intent": "calendar_read", "status": "ok", "reply": "Calendar: lead call"}
+        return {"intent": "location_read", "status": "ok", "reply": "Last location: Home."}
+
+    class FakeBoundary:
+        route_text_command = staticmethod(fake_route)
+
+    sent = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: FakeBoundary())
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+
+    for text in ("what's on my calendar?", "where am I?"):
+        assert await adapter._handle_sebos_rules(
+            space_id="space-1",
+            message_id="msg-1",
+            text=text,
+            mtype=MessageType.TEXT,
+            media_urls=[],
+            media_types=[],
+        ) == "handled"
+
+    assert calls == ["what's on my calendar?", "where am I?"]
+    assert sent == [
+        ("space-1", "Calendar: lead call", "msg-1"),
+        ("space-1", "Last location: Home.", "msg-1"),
+    ]
 
 
 @pytest.mark.asyncio

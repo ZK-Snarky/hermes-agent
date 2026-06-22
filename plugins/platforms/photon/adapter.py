@@ -99,6 +99,7 @@ _HERMES_SEBOS_PHOTON_BOUNDARY = Path.home() / ".hermes" / "plugins" / "hermes-se
 _SEBOS_FALLBACK_COMMAND_ALLOWLIST = frozenset(
     {
         "sebos-route-command",
+        "sebos-board-query",
         "sebos-render-mission-control",
         "sebos-journal-pending-prompt",
         "sebos-add-reminder",
@@ -112,7 +113,7 @@ _THREAD_CONTINUE_RE = re.compile(r"^\s*t\+\s*:?\s*(.*)$", re.IGNORECASE | re.DOT
 # is a clean personal channel, so any leaked gateway/runtime chatter is replaced
 # with a neutral acknowledgement instead of being sent verbatim.
 _PHOTON_INTERNAL_NOTICE_RE = re.compile(
-    r"(?:Codex gpt-5\.5 caps context|auto-compaction was raised|hermes config set|tool call|tool_call|function call|status_callback|context compression)",
+    r"(?:Codex gpt-5\.5 caps context|auto-compaction was raised|hermes config set|tool call|tool_call|function call|status_callback|context compression|We need answer|Need load skill|maybe no tool|Load FC skills)",
     re.IGNORECASE,
 )
 
@@ -241,6 +242,7 @@ class PhotonAdapter(BasePlatformAdapter):
     """
 
     MAX_MESSAGE_LENGTH = _MAX_MESSAGE_LENGTH
+    SUPPORTS_MESSAGE_EDITING = False
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform("photon"))
@@ -515,6 +517,26 @@ class PhotonAdapter(BasePlatformAdapter):
             timeout=25.0,
         )
 
+    async def _board_query(self, command: str, *args: str) -> Dict[str, Any]:
+        """Read Live Board state through the plugin facade with fallback."""
+        boundary = _load_sebos_photon_boundary()
+        board_query = getattr(boundary, "board_query", None) if boundary else None
+        if board_query is not None:
+            try:
+                return await board_query(command, *args, timeout=25.0)
+            except Exception as exc:
+                logger.warning(
+                    "[photon] hermes-sebos board query facade failed; falling back: %s",
+                    exc,
+                )
+        return await self._run_sebos_json(
+            "sebos-board-query",
+            "--json",
+            command,
+            *args,
+            timeout=25.0,
+        )
+
     async def _send_quiet(
         self,
         chat_id: str,
@@ -533,9 +555,19 @@ class PhotonAdapter(BasePlatformAdapter):
             logger.warning("[photon] sebOS rule reply failed: %s", result.error)
 
     async def _mission_control_text(self) -> str:
-        data = await self._render_mission_control()
+        data = await self._board_query("snapshot")
         body = data.get("body") or data.get("raw") or "Mission Control unavailable."
         return str(body).strip()
+
+    @staticmethod
+    def _lines_payload_text(payload: Dict[str, Any], key: str, *, empty: str) -> str:
+        lines = payload.get(key)
+        if not isinstance(lines, list):
+            lines = payload.get("lines")
+        if not isinstance(lines, list) or not lines:
+            return empty
+        rendered = "\n".join(f"- {str(item).strip()}" for item in lines if str(item).strip())
+        return rendered or empty
 
     @staticmethod
     def _section_from_board(body: str, label: str, max_items: int) -> str:
@@ -901,11 +933,19 @@ class PhotonAdapter(BasePlatformAdapter):
                 reply_to=message_id,
             )
             return "handled"
-        if lowered == "now" or lowered == "next":
-            board = await self._mission_control_text()
+        if lowered == "now":
+            payload = await self._board_query("now")
             await self._send_quiet(
                 space_id,
-                self._section_from_board(board, lowered.upper(), 1 if lowered == "now" else 3),
+                self._lines_payload_text(payload, "now", empty="NOW: empty")[:_MAX_MESSAGE_LENGTH],
+                reply_to=message_id,
+            )
+            return "handled"
+        if lowered == "next":
+            payload = await self._board_query("next")
+            await self._send_quiet(
+                space_id,
+                self._lines_payload_text(payload, "next", empty="No next item on the board.")[:_MAX_MESSAGE_LENGTH],
                 reply_to=message_id,
             )
             return "handled"
@@ -966,6 +1006,9 @@ class PhotonAdapter(BasePlatformAdapter):
                 "remind", "reminder", "remember to", "don't let me forget",
                 "dont let me forget", "note", "write this down", "save this",
                 "journal", "log this", "board", "control center", "mission control",
+                "what's next", "whats next", "what next", "next on the agenda",
+                "agenda", "what should i do", "what should i work on",
+                "where am i", "where was i", "calendar", "location",
             )
         )
 
@@ -1336,6 +1379,11 @@ class PhotonAdapter(BasePlatformAdapter):
             "delete reminder ",
         )
         if lowered.startswith(prefixes):
+            return True
+        if re.search(
+            r"\b(?:what(?:'s|s|\s+is)?\s+next|what\s+next|next\s+on\s+(?:the\s+)?agenda|agenda\b|what\s+should\s+i\s+(?:do|work\s+on)|where\s+(?:am|was)\s+i|calendar|location)\b",
+            lowered,
+        ):
             return True
         exact = {
             "where was i", "where was i?", "where am i", "where am i?",

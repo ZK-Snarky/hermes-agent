@@ -1587,6 +1587,17 @@ def test_normalize_codex_response_no_leak_passes_through(monkeypatch):
     assert assistant_message.tool_calls == []
 
 
+def test_streaming_helper_does_not_forward_tool_planning_content_to_display():
+    import inspect
+    from agent.chat_completion_helpers import interruptible_streaming_api_call
+
+    source = inspect.getsource(interruptible_streaming_api_call)
+
+    assert "chunk_has_tool_delta" in source
+    assert "elif agent.stream_delta_callback" not in source
+    assert "Some providers emit planning" in source
+
+
 def test_interim_commentary_is_not_marked_already_streamed_without_callbacks(monkeypatch):
     agent = _build_agent(monkeypatch)
     observed = {}

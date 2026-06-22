@@ -135,3 +135,9 @@ def test_photon_final_response_redacts_secrets(photon_platform_registered):
     sanitized = _sanitize_gateway_final_response("photon", raw)
     assert "[REDACTED]" in sanitized
     assert "sk-ABCDEFGHIJKLMNOP1234567890" not in sanitized
+
+
+def test_photon_final_response_suppresses_model_planning_leaks(photon_platform_registered):
+    raw = "We need answer based memory maybe no tool? Need load skill. Load FC skills."
+
+    assert _sanitize_gateway_final_response("photon", raw) == "Received."

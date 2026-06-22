@@ -82,6 +82,29 @@ async def test_render_mission_control_builds_legacy_cli_contract(monkeypatch: py
 
 
 @pytest.mark.asyncio
+async def test_board_query_builds_live_board_cli_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary = _load_boundary_module()
+    calls = []
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        calls.append((args, stdin, timeout))
+        return {"status": "ok", "next": ["Falconnect: verify Re-Engage"], "returncode": 0}
+
+    monkeypatch.setattr(boundary, "run_sebos_json", fake_run)
+
+    result = await boundary.board_query("next", "--lane", "Falconnect", timeout=25.0)
+
+    assert result["next"] == ["Falconnect: verify Re-Engage"]
+    assert calls == [
+        (
+            ("sebos-board-query", "--json", "next", "--lane", "Falconnect"),
+            None,
+            25.0,
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_active_journal_prompt_date_builds_legacy_cli_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     boundary = _load_boundary_module()
     calls = []
