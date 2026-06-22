@@ -231,6 +231,39 @@ def _markdown_enabled() -> bool:
     }
 
 
+_TRUTHY_ENV = {"true", "1", "yes", "on"}
+
+
+def _photon_auth_env_value(key: str) -> str:
+    """Read Photon auth env using Hermes' config-backed env helper when present."""
+    try:
+        from hermes_cli.config import get_env_value
+    except Exception:
+        return os.getenv(key, "") or ""
+    return get_env_value(key) or os.getenv(key, "") or ""
+
+
+def _normalize_photon_identity(value: Any) -> str:
+    """Normalize Spectrum/iMessage sender or space identifiers for allowlists."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("any;-;"):
+        raw = raw[len("any;-;"):]
+    elif raw.startswith("iMessage;-;"):
+        raw = raw[len("iMessage;-;"):]
+    return raw.strip()
+
+
+def _photon_allowed_user_candidates(*values: Any) -> set[str]:
+    candidates: set[str] = set()
+    for value in values:
+        normalized = _normalize_photon_identity(value)
+        if normalized:
+            candidates.add(normalized)
+    return candidates
+
+
 # ---------------------------------------------------------------------------
 # Adapter
 
@@ -356,6 +389,39 @@ class PhotonAdapter(BasePlatformAdapter):
             if "mention_patterns" in extra
             else os.getenv("PHOTON_MENTION_PATTERNS")
         )
+
+    def _is_photon_user_allowed_for_sebos(
+        self,
+        *,
+        sender_id: Any = None,
+        space_phone: Any = None,
+        space_id: Any = None,
+    ) -> bool:
+        """Fail-closed pre-gateway auth for sebOS Photon side effects.
+
+        Photon sebOS shortcuts execute before the normal gateway
+        ``PHOTON_ALLOWED_USERS`` check. Mirror the gateway's Photon auth knobs
+        here so audio journal ingest, natural-intent routing, and explicit
+        sebOS rules cannot mutate state or send acknowledgements for an
+        unauthorized sender.
+        """
+        if _photon_auth_env_value("PHOTON_ALLOW_ALL_USERS").strip().lower() in _TRUTHY_ENV:
+            return True
+
+        raw_allowed = _photon_auth_env_value("PHOTON_ALLOWED_USERS").strip()
+        if not raw_allowed:
+            return False
+
+        allowed = {
+            _normalize_photon_identity(part)
+            for part in re.split(r"[,\n]", raw_allowed)
+            if _normalize_photon_identity(part)
+        }
+        if "*" in allowed:
+            return True
+
+        candidates = _photon_allowed_user_candidates(sender_id, space_phone, space_id)
+        return bool(candidates & allowed)
 
     # -- Group-mention gating (iMessage parity) -------------------
 
@@ -1664,6 +1730,11 @@ class PhotonAdapter(BasePlatformAdapter):
         # iMessage spaces carry their type directly — no id string-sniffing.
         chat_type = "group" if space.get("type") == "group" else "dm"
         sender_id = sender.get("id") or space.get("phone") or space_id
+        sebos_preauth = self._is_photon_user_allowed_for_sebos(
+            sender_id=sender_id,
+            space_phone=space.get("phone"),
+            space_id=space_id,
+        )
 
         ts_str = event.get("timestamp") or ""
         try:
@@ -1846,7 +1917,7 @@ class PhotonAdapter(BasePlatformAdapter):
             and "￼" in (text or "")
             and not stripped
         ):
-            if await self._try_ingest_audio_journal_reply(
+            if sebos_preauth and await self._try_ingest_audio_journal_reply(
                 space_id=space_id,
                 sender_id=sender_id,
                 message_id=event.get("messageId"),
@@ -1880,7 +1951,7 @@ class PhotonAdapter(BasePlatformAdapter):
                 )
                 text = thread_continue.group(1).strip() or " "
 
-        if await self._try_ingest_audio_journal_reply(
+        if sebos_preauth and await self._try_ingest_audio_journal_reply(
             space_id=space_id,
             sender_id=sender_id,
             message_id=event.get("messageId"),
@@ -1891,7 +1962,7 @@ class PhotonAdapter(BasePlatformAdapter):
         ):
             return
 
-        if not thread_root:
+        if not thread_root and sebos_preauth:
             gate_result = await self._try_intent_gate(
                 space_id=space_id,
                 message_id=event.get("messageId"),

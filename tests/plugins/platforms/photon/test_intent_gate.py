@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
@@ -16,6 +17,8 @@ from plugins.platforms.photon.adapter import PhotonAdapter
 def _make_adapter(monkeypatch: pytest.MonkeyPatch) -> PhotonAdapter:
     monkeypatch.setenv("PHOTON_PROJECT_ID", "test-project-id")
     monkeypatch.setenv("PHOTON_PROJECT_SECRET", "test-project-secret")
+    monkeypatch.setenv("PHOTON_ALLOWED_USERS", "+155****4567")
+    monkeypatch.setattr(adapter_module, "_photon_auth_env_value", lambda key: os.getenv(key, ""))
     monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: None)
     cfg = PlatformConfig(
         enabled=True,
@@ -51,6 +54,46 @@ def _text_event(text: str, *, message_id: str = "user-msg-1") -> Dict[str, Any]:
         "content": {"type": "text", "text": text},
         "timestamp": "2026-06-20T10:00:00.000Z",
     }
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_dispatch_skips_pre_gateway_sebos_shortcuts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PHOTON_PROJECT_ID", "test-project-id")
+    monkeypatch.setenv("PHOTON_PROJECT_SECRET", "test-project-secret")
+    monkeypatch.setenv("PHOTON_ALLOWED_USERS", "+155****0000")
+    monkeypatch.setattr(adapter_module, "_photon_auth_env_value", lambda key: os.getenv(key, ""))
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: None)
+    adapter = PhotonAdapter(
+        PlatformConfig(enabled=True, token="", extra={"sebos_rules": True, "intent_gate": True})
+    )
+    captured = _capture_handled(adapter, monkeypatch)
+
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("unauthorized sender must not reach sebOS shortcut path")
+
+    monkeypatch.setattr(adapter, "_try_ingest_audio_journal_reply", forbidden)
+    monkeypatch.setattr(adapter, "_try_intent_gate", forbidden)
+    monkeypatch.setattr(adapter, "_handle_sebos_rules", forbidden)
+
+    await adapter._dispatch_inbound(_text_event("board"))
+
+    assert len(captured) == 1
+    assert captured[0].text == "board"
+
+
+def test_sebos_preauth_normalizes_photon_sender_and_space_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PHOTON_PROJECT_ID", "test-project-id")
+    monkeypatch.setenv("PHOTON_PROJECT_SECRET", "test-project-secret")
+    monkeypatch.setenv("PHOTON_ALLOWED_USERS", "+155****4567")
+    monkeypatch.setattr(adapter_module, "_photon_auth_env_value", lambda key: os.getenv(key, ""))
+    adapter = PhotonAdapter(PlatformConfig(enabled=True, token="", extra={}))
+
+    assert adapter._is_photon_user_allowed_for_sebos(sender_id="any;-;+155****4567")
+    assert adapter._is_photon_user_allowed_for_sebos(space_phone="+155****4567")
+    assert adapter._is_photon_user_allowed_for_sebos(space_id="iMessage;-;+155****4567")
+    assert not adapter._is_photon_user_allowed_for_sebos(sender_id="+155****0000")
 
 
 @pytest.mark.asyncio
