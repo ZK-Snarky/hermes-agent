@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -13,8 +15,53 @@ from plugins.platforms.photon.adapter import PhotonAdapter
 def _make_adapter(monkeypatch: pytest.MonkeyPatch, extra: dict | None = None) -> PhotonAdapter:
     monkeypatch.setenv("PHOTON_PROJECT_ID", "test-project-id")
     monkeypatch.setenv("PHOTON_PROJECT_SECRET", "test-project-secret")
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: None)
     cfg = PlatformConfig(enabled=True, token="", extra=extra or {"sebos_rules": True})
     return PhotonAdapter(cfg)
+
+
+def test_sebos_fallback_allowlist_is_exact() -> None:
+    assert adapter_module._SEBOS_FALLBACK_COMMAND_ALLOWLIST == frozenset(
+        {
+            "sebos-route-command",
+            "sebos-render-mission-control",
+            "sebos-journal-pending-prompt",
+            "sebos-add-reminder",
+            "sebos-ingest-journal",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_sebos_json_rejects_non_allowlisted_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _make_adapter(monkeypatch)
+    result = await adapter._run_sebos_json("sebos-dangerous-new-command")
+
+    assert result == {
+        "status": "error",
+        "error_layer": "router",
+        "error": "sebOS fallback command not allowed",
+        "returncode": 126,
+    }
+
+
+def test_photon_adapter_has_no_non_allowlisted_literal_sebos_fallback_calls() -> None:
+    adapter_path = Path(adapter_module.__file__)
+    tree = ast.parse(adapter_path.read_text())
+    illegal: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "_run_sebos_json":
+            continue
+        if not node.args or not isinstance(node.args[0], ast.Constant):
+            continue
+        command = node.args[0].value
+        if isinstance(command, str) and command.startswith("sebos-"):
+            if command not in adapter_module._SEBOS_FALLBACK_COMMAND_ALLOWLIST:
+                illegal.append((node.lineno, command))
+    assert illegal == []
 
 
 @pytest.mark.asyncio
@@ -49,19 +96,92 @@ async def test_sebos_rules_unknown_text_falls_through_to_hermes(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_sebos_rules_explicit_command_routes_to_sebos(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sebos_rules_board_routes_through_boundary_facade(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _make_adapter(monkeypatch)
-    calls = []
+    boundary_calls = []
+
+    class FakeBoundary:
+        async def render_mission_control(self, *, dry_run=True, timeout=25.0):
+            boundary_calls.append((dry_run, timeout))
+            return {"status": "ok", "body": "BOARD\n\nNOW\n- call lead\n\nNEXT\n- prep"}
 
     async def fake_run(*args, stdin=None, timeout=20.0):
-        calls.append((args, stdin, timeout))
-        return {"intent": "reminder", "status": "ok", "reply": "Reminder set."}
+        raise AssertionError("board should use plugin boundary first")
 
     sent = []
 
     async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
         sent.append((space_id, text, reply_to))
 
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: FakeBoundary())
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+
+    result = await adapter._handle_sebos_rules(
+        space_id="space-1",
+        message_id="msg-1",
+        text="board",
+        mtype=MessageType.TEXT,
+        media_urls=[],
+        media_types=[],
+    )
+
+    assert result == "handled"
+    assert boundary_calls == [(True, 25.0)]
+    assert sent == [("space-1", "BOARD\n\nNOW\n- call lead\n\nNEXT\n- prep", "msg-1")]
+
+
+@pytest.mark.asyncio
+async def test_sebos_rules_next_falls_back_to_old_mission_control_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _make_adapter(monkeypatch)
+    calls = []
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        calls.append((args, stdin, timeout))
+        return {"status": "ok", "body": "BOARD\n\nNOW\n- call lead\n\nNEXT\n- prep\n- follow up"}
+
+    sent = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: None)
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+
+    result = await adapter._handle_sebos_rules(
+        space_id="space-1",
+        message_id="msg-1",
+        text="next",
+        mtype=MessageType.TEXT,
+        media_urls=[],
+        media_types=[],
+    )
+
+    assert result == "handled"
+    assert calls == [(("sebos-render-mission-control", "--dry-run", "--json"), None, 25.0)]
+    assert sent == [("space-1", "NEXT:\n- prep\n- follow up", "msg-1")]
+
+
+@pytest.mark.asyncio
+async def test_sebos_rules_explicit_command_routes_through_boundary_facade(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _make_adapter(monkeypatch)
+    boundary_calls = []
+
+    class FakeBoundary:
+        async def route_text_command(self, text, *, write=True, db_path=None, channel="imessage", timeout=45.0):
+            boundary_calls.append((text, write, db_path, channel, timeout))
+            return {"intent": "reminder", "status": "ok", "reply": "Reminder set."}
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        raise AssertionError("explicit commands should use plugin boundary first")
+
+    sent = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: FakeBoundary())
     monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
     monkeypatch.setattr(adapter, "_send_quiet", fake_send)
 
@@ -75,8 +195,53 @@ async def test_sebos_rules_explicit_command_routes_to_sebos(monkeypatch: pytest.
     )
 
     assert result == "handled"
-    assert calls[0][0][:6] == ("sebos-route-command", "--text", "-", "--write", "--db", str(adapter_module._SEBOS_DB_PATH))
-    assert calls[0][1] == "reminder: tomorrow at 9 call Chaz"
+    assert boundary_calls == [
+        (
+            "reminder: tomorrow at 9 call Chaz",
+            True,
+            str(adapter_module._SEBOS_DB_PATH),
+            "imessage",
+            45.0,
+        )
+    ]
+    assert sent == [("space-1", "Reminder set.", "msg-1")]
+
+
+@pytest.mark.asyncio
+async def test_sebos_rules_explicit_command_falls_back_to_old_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _make_adapter(monkeypatch)
+    calls = []
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        calls.append((args, stdin, timeout))
+        return {"intent": "reminder", "status": "ok", "reply": "Reminder set."}
+
+    sent = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: None)
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+
+    result = await adapter._handle_sebos_rules(
+        space_id="space-1",
+        message_id="msg-1",
+        text="reminder: tomorrow at 9 call Chaz",
+        mtype=MessageType.TEXT,
+        media_urls=[],
+        media_types=[],
+    )
+
+    assert result == "handled"
+    assert calls == [
+        (
+            ("sebos-route-command", "--text", "-", "--write", "--db", str(adapter_module._SEBOS_DB_PATH), "--json"),
+            "reminder: tomorrow at 9 call Chaz",
+            45.0,
+        )
+    ]
     assert sent == [("space-1", "Reminder set.", "msg-1")]
 
 
@@ -113,6 +278,7 @@ async def test_sebos_rules_journal_routes_and_replies_once(monkeypatch: pytest.M
     async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
         sent.append((space_id, text, reply_to))
 
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: None)
     monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
     monkeypatch.setattr(adapter, "_send_quiet", fake_send)
 

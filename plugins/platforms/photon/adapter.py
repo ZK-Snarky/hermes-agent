@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib.util
 import json
 import logging
 import os
@@ -36,7 +37,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import sqlite3
 import tempfile
 import time
 import uuid
@@ -95,8 +95,40 @@ _SEBOS_BIN_DIR = _SEBOS_ROOT / "bin"
 _SEBOS_DB_PATH = _SEBOS_ROOT / "sebos.db"
 _SEBOS_AUDIO_INBOX = _SEBOS_ROOT / "inbox" / "audio"
 _DOCUMENT_CACHE_DIR = Path.home() / ".hermes" / "cache" / "documents"
+_HERMES_SEBOS_PHOTON_BOUNDARY = Path.home() / ".hermes" / "plugins" / "hermes-sebos" / "photon_boundary.py"
+_SEBOS_FALLBACK_COMMAND_ALLOWLIST = frozenset(
+    {
+        "sebos-route-command",
+        "sebos-render-mission-control",
+        "sebos-journal-pending-prompt",
+        "sebos-add-reminder",
+        "sebos-ingest-journal",
+    }
+)
 _THREAD_START_RE = re.compile(r"^\s*(?:t|thread)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
 _THREAD_CONTINUE_RE = re.compile(r"^\s*t\+\s*:?\s*(.*)$", re.IGNORECASE | re.DOTALL)
+
+# Internal-notice text that must never reach the user's iMessage inbox. iMessage
+# is a clean personal channel, so any leaked gateway/runtime chatter is replaced
+# with a neutral acknowledgement instead of being sent verbatim.
+_PHOTON_INTERNAL_NOTICE_RE = re.compile(
+    r"(?:Codex gpt-5\.5 caps context|auto-compaction was raised|hermes config set|tool call|tool_call|function call|status_callback|context compression)",
+    re.IGNORECASE,
+)
+
+
+def _outbound_sanitize(text: str) -> str:
+    """Shape a final assistant reply before it is sent over Photon/iMessage.
+
+    Redacts secrets (shared gateway helper) and suppresses internal-notice
+    text so runtime chatter never lands in the clean personal inbox.
+    """
+    from gateway.outbound_sanitize import redact_user_facing_secrets
+
+    redacted = redact_user_facing_secrets(str(text))
+    if _PHOTON_INTERNAL_NOTICE_RE.search(redacted):
+        return "Received."
+    return redacted
 
 # Group-chat mention wake words. When ``require_mention`` is enabled, group
 # messages are ignored unless they match one of these patterns — same
@@ -106,6 +138,25 @@ _DEFAULT_MENTION_PATTERNS = [
     r"(?<![\w@])@?hermes\s+agent\b[,:\-]?",
     r"(?<![\w@])@?hermes\b[,:\-]?",
 ]
+
+
+def _load_sebos_photon_boundary() -> Any | None:
+    """Load the hermes-sebos Photon facade without changing plugin enablement."""
+    if not _HERMES_SEBOS_PHOTON_BOUNDARY.exists():
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "hermes_sebos_photon_boundary",
+            _HERMES_SEBOS_PHOTON_BOUNDARY,
+        )
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception as exc:
+        logger.warning("[photon] hermes-sebos Photon boundary unavailable: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +421,22 @@ class PhotonAdapter(BasePlatformAdapter):
         stdin: Optional[str] = None,
         timeout: float = 20.0,
     ) -> Dict[str, Any]:
-        exe = _SEBOS_BIN_DIR / args[0]
+        if not args or not args[0]:
+            return {
+                "status": "error",
+                "error_layer": "router",
+                "error": "missing sebOS command",
+                "returncode": 127,
+            }
+        command = args[0]
+        if command not in _SEBOS_FALLBACK_COMMAND_ALLOWLIST:
+            return {
+                "status": "error",
+                "error_layer": "router",
+                "error": "sebOS fallback command not allowed",
+                "returncode": 126,
+            }
+        exe = _SEBOS_BIN_DIR / command
         if not exe.exists():
             return {"status": "error", "error": f"missing sebOS command: {exe}"}
         proc = await asyncio.create_subprocess_exec(
@@ -389,7 +455,7 @@ class PhotonAdapter(BasePlatformAdapter):
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            return {"status": "error", "error": f"sebOS command timed out: {args[0]}"}
+            return {"status": "error", "error": f"sebOS command timed out: {command}"}
         raw = out.decode("utf-8", "replace").strip()
         stderr = err.decode("utf-8", "replace").strip()
         try:
@@ -401,6 +467,53 @@ class PhotonAdapter(BasePlatformAdapter):
             data["stderr"] = stderr
         data["returncode"] = proc.returncode
         return data
+
+    async def _route_explicit_sebos_command(self, text: str) -> Dict[str, Any]:
+        """Route explicit sebOS command text through plugin facade with fallback."""
+        boundary = _load_sebos_photon_boundary()
+        route_text_command = getattr(boundary, "route_text_command", None) if boundary else None
+        if route_text_command is not None:
+            try:
+                return await route_text_command(
+                    text,
+                    write=True,
+                    db_path=str(_SEBOS_DB_PATH),
+                    channel="imessage",
+                    timeout=45.0,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[photon] hermes-sebos route facade failed; falling back: %s",
+                    exc,
+                )
+        return await self._run_sebos_json(
+            "sebos-route-command",
+            "--text", "-",
+            "--write",
+            "--db", str(_SEBOS_DB_PATH),
+            "--json",
+            stdin=text,
+            timeout=45.0,
+        )
+
+    async def _render_mission_control(self) -> Dict[str, Any]:
+        """Render Mission Control through plugin facade with fallback."""
+        boundary = _load_sebos_photon_boundary()
+        render_mission_control = getattr(boundary, "render_mission_control", None) if boundary else None
+        if render_mission_control is not None:
+            try:
+                return await render_mission_control(dry_run=True, timeout=25.0)
+            except Exception as exc:
+                logger.warning(
+                    "[photon] hermes-sebos Mission Control facade failed; falling back: %s",
+                    exc,
+                )
+        return await self._run_sebos_json(
+            "sebos-render-mission-control",
+            "--dry-run",
+            "--json",
+            timeout=25.0,
+        )
 
     async def _send_quiet(
         self,
@@ -420,12 +533,7 @@ class PhotonAdapter(BasePlatformAdapter):
             logger.warning("[photon] sebOS rule reply failed: %s", result.error)
 
     async def _mission_control_text(self) -> str:
-        data = await self._run_sebos_json(
-            "sebos-render-mission-control",
-            "--dry-run",
-            "--json",
-            timeout=25.0,
-        )
+        data = await self._render_mission_control()
         body = data.get("body") or data.get("raw") or "Mission Control unavailable."
         return str(body).strip()
 
@@ -473,18 +581,6 @@ class PhotonAdapter(BasePlatformAdapter):
             logger.warning("[photon] failed to copy audio into sebOS inbox: %s", exc)
             return None
 
-    @staticmethod
-    def _parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
-        if not value:
-            return None
-        try:
-            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed
-
     def _ack_reactions_enabled_for_sebos(self) -> bool:
         return bool(self._ack_reactions_enabled)
 
@@ -527,30 +623,104 @@ class PhotonAdapter(BasePlatformAdapter):
             return "👍"
         return None
 
-    def _active_journal_prompt_date(self, message_dt: datetime) -> Optional[str]:
-        if not _SEBOS_DB_PATH.exists():
-            return None
-        try:
-            with sqlite3.connect(_SEBOS_DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute(
-                    """
-                    SELECT date, created_at, delivered_at
-                    FROM journal_prompts
-                    ORDER BY created_at DESC
-                    LIMIT 20
-                    """
-                ).fetchall()
-        except sqlite3.Error as exc:
-            logger.warning("[photon] could not inspect sebOS journal prompts: %s", exc)
-            return None
-        for row in rows:
-            start = self._parse_iso_dt(row["delivered_at"] or row["created_at"])
-            if start is None:
-                continue
-            if timedelta(0) <= message_dt - start <= timedelta(hours=6):
-                return str(row["date"])
+    async def _active_journal_prompt_result(self, message_dt: datetime) -> Dict[str, Any]:
+        """Probe active journal prompt through plugin facade with fallback."""
+        at = message_dt.isoformat()
+        boundary = _load_sebos_photon_boundary()
+        active_journal_prompt_date = getattr(boundary, "active_journal_prompt_date", None) if boundary else None
+        if active_journal_prompt_date is not None:
+            try:
+                return await active_journal_prompt_date(
+                    at,
+                    db_path=str(_SEBOS_DB_PATH),
+                    timeout=20.0,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[photon] hermes-sebos active journal facade failed; falling back: %s",
+                    exc,
+                )
+        return await self._run_sebos_json(
+            "sebos-journal-pending-prompt",
+            "--at", at,
+            "--db", str(_SEBOS_DB_PATH),
+            "--json",
+        )
+
+    async def _active_journal_prompt_date(self, message_dt: datetime) -> Optional[str]:
+        result = await self._active_journal_prompt_result(message_dt)
+        date = result.get("date")
+        if isinstance(date, str) and date.strip():
+            return date.strip()
         return None
+
+    async def _add_reminder(self, payload: Dict[str, str]) -> Dict[str, Any]:
+        """Add a reminder through plugin facade with fallback."""
+        boundary = _load_sebos_photon_boundary()
+        add_reminder = getattr(boundary, "add_reminder", None) if boundary else None
+        if add_reminder is not None:
+            try:
+                return await add_reminder(
+                    payload["title"],
+                    due=payload.get("due"),
+                    location=payload.get("location"),
+                    latitude=payload.get("latitude"),
+                    longitude=payload.get("longitude"),
+                    radius=payload.get("radius"),
+                    proximity=payload.get("proximity"),
+                    timeout=45.0,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[photon] hermes-sebos reminder facade failed; falling back: %s",
+                    exc,
+                )
+        return await self._run_sebos_json(
+            *self._reminder_payload_args(payload),
+            timeout=45.0,
+        )
+
+    async def _ingest_journal_payload(self, payload_path: str, *, sender_id: str) -> Dict[str, Any]:
+        """Ingest a prepared journal payload through plugin facade with fallback."""
+        boundary = _load_sebos_photon_boundary()
+        ingest_journal = getattr(boundary, "ingest_journal", None) if boundary else None
+        if ingest_journal is not None:
+            try:
+                return await ingest_journal(
+                    payload_path,
+                    source="photon",
+                    sender=sender_id,
+                    timeout=360.0,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[photon] hermes-sebos journal ingest facade failed; falling back: %s",
+                    exc,
+                )
+        return await self._run_sebos_json(
+            "sebos-ingest-journal",
+            payload_path,
+            "--source", "photon",
+            "--sender", sender_id,
+            timeout=360.0,
+        )
+
+    @staticmethod
+    def _reminder_payload_args(payload: Dict[str, str]) -> List[str]:
+        args = ["sebos-add-reminder", payload["title"]]
+        if payload.get("due"):
+            args.extend(["--due", payload["due"]])
+        if payload.get("location"):
+            args.extend(["--location", payload["location"]])
+        if payload.get("latitude"):
+            args.extend(["--latitude", payload["latitude"]])
+        if payload.get("longitude"):
+            args.extend(["--longitude", payload["longitude"]])
+        if payload.get("radius"):
+            args.extend(["--radius", payload["radius"]])
+        if payload.get("proximity"):
+            args.extend(["--proximity", payload["proximity"]])
+        return args
 
     @staticmethod
     def _recent_audio_document_for_marker(message_dt: datetime) -> Optional[str]:
@@ -584,23 +754,6 @@ class PhotonAdapter(BasePlatformAdapter):
         candidates.sort(key=lambda item: item[0])
         return str(candidates[0][1])
 
-    @staticmethod
-    def _latest_journal_body(entry_uid: str) -> Optional[str]:
-        if not _SEBOS_DB_PATH.exists():
-            return None
-        try:
-            with sqlite3.connect(_SEBOS_DB_PATH) as conn:
-                row = conn.execute(
-                    "SELECT body FROM journal_entries WHERE entry_uid=? ORDER BY id DESC LIMIT 1",
-                    (entry_uid,),
-                ).fetchone()
-        except sqlite3.Error as exc:
-            logger.warning("[photon] could not read saved sebOS journal body: %s", exc)
-            return None
-        if not row:
-            return None
-        return str(row[0] or "").strip() or None
-
     async def _try_ingest_audio_journal_reply(
         self,
         *,
@@ -612,7 +765,7 @@ class PhotonAdapter(BasePlatformAdapter):
         media_urls: List[str],
         media_types: List[str],
     ) -> bool:
-        prompt_date = self._active_journal_prompt_date(timestamp)
+        prompt_date = await self._active_journal_prompt_date(timestamp)
         if not prompt_date:
             return False
         if not media_urls and "\ufffc" in text:
@@ -692,13 +845,7 @@ class PhotonAdapter(BasePlatformAdapter):
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh)
-            result = await self._run_sebos_json(
-                "sebos-ingest-journal",
-                tmp_name,
-                "--source", "photon",
-                "--sender", sender_id,
-                timeout=360.0,
-            )
+            result = await self._ingest_journal_payload(tmp_name, sender_id=sender_id)
         finally:
             try:
                 os.unlink(tmp_name)
@@ -764,15 +911,7 @@ class PhotonAdapter(BasePlatformAdapter):
             return "handled"
 
         if stripped and self._looks_like_sebos_command(stripped):
-            result = await self._run_sebos_json(
-                "sebos-route-command",
-                "--text", "-",
-                "--write",
-                "--db", str(_SEBOS_DB_PATH),
-                "--json",
-                stdin=stripped,
-                timeout=45.0,
-            )
+            result = await self._route_explicit_sebos_command(stripped)
             logger.info("[photon] sebOS route result: %s", result)
             intent = str(result.get("intent") or "")
             status = str(result.get("status") or "")
@@ -1030,7 +1169,7 @@ class PhotonAdapter(BasePlatformAdapter):
         return due
 
     @staticmethod
-    def _intent_reminder_args(intent: Dict[str, Any], original_text: str = "") -> Optional[List[str]]:
+    def _intent_reminder_payload(intent: Dict[str, Any], original_text: str = "") -> Optional[Dict[str, str]]:
         title = str(intent.get("title") or "").strip()
         due = PhotonAdapter._intent_due_datetime(intent, original_text)
         location = str(intent.get("location_name") or intent.get("location") or "").strip()
@@ -1040,20 +1179,27 @@ class PhotonAdapter(BasePlatformAdapter):
         proximity = str(intent.get("proximity") or "").strip().lower()
         if not title or (not due and not location):
             return None
-        args = ["sebos-add-reminder", title]
+        payload = {"title": title}
         if due:
-            args.extend(["--due", due])
+            payload["due"] = due
         if location:
-            args.extend(["--location", location])
+            payload["location"] = location
         if latitude:
-            args.extend(["--latitude", latitude])
+            payload["latitude"] = latitude
         if longitude:
-            args.extend(["--longitude", longitude])
+            payload["longitude"] = longitude
         if radius:
-            args.extend(["--radius", radius])
+            payload["radius"] = radius
         if proximity in {"enter", "leave"}:
-            args.extend(["--proximity", proximity])
-        return args
+            payload["proximity"] = proximity
+        return payload
+
+    @staticmethod
+    def _intent_reminder_args(intent: Dict[str, Any], original_text: str = "") -> Optional[List[str]]:
+        payload = PhotonAdapter._intent_reminder_payload(intent, original_text)
+        if not payload:
+            return None
+        return PhotonAdapter._reminder_payload_args(payload)
 
     @staticmethod
     def _intent_to_sebos_text(intent: Dict[str, Any]) -> Optional[str]:
@@ -1110,10 +1256,10 @@ class PhotonAdapter(BasePlatformAdapter):
             return None
         routed_text = self._intent_to_sebos_text(intent)
         if kind == "reminder":
-            reminder_args = self._intent_reminder_args(intent, text)
-            if not reminder_args:
+            reminder_payload = self._intent_reminder_payload(intent, text)
+            if not reminder_payload:
                 return None
-            writer = await self._run_sebos_json(*reminder_args, timeout=45.0)
+            writer = await self._add_reminder(reminder_payload)
             logger.info("[photon] intent gate reminder writer result: %s", writer)
             if writer.get("status") == "ok":
                 reply_bits = [f"Reminder added: {writer.get('title', '').strip()}"]
@@ -1137,16 +1283,16 @@ class PhotonAdapter(BasePlatformAdapter):
         else:
             if not routed_text:
                 return None
-            result = await self._run_sebos_json(
-                "sebos-route-command",
-                "--text", "-",
-                "--write",
-                "--db", str(_SEBOS_DB_PATH),
-                "--json",
-                stdin=routed_text,
-                timeout=45.0,
-            )
+            result = await self._route_explicit_sebos_command(routed_text)
             logger.info("[photon] intent gate route result: %s", result)
+        if (
+            kind == "note"
+            and str(result.get("status") or "") == "dry_run"
+            and str(((result.get("details") or {}).get("reason")) or "") == "no_appender_wired"
+        ):
+            # Legacy safety for older sebOS builds that staged notes instead of
+            # writing them. Current sebOS appends to Mission Control Notes.
+            return None
         reply = str(result.get("reply") or "").strip()
         ack_emoji = self._sebos_ack_emoji(result)
         if ack_emoji and await self._send_ack_reaction(space_id, message_id, ack_emoji):
@@ -1170,6 +1316,11 @@ class PhotonAdapter(BasePlatformAdapter):
         lowered = (text or "").strip().lower()
         if not lowered:
             return False
+        while True:
+            cleaned = re.sub(r"^(?:hey|hi|yo|ok|okay|athena)[,\s]+", "", lowered, count=1).strip()
+            if cleaned == lowered:
+                break
+            lowered = cleaned
         prefixes = (
             "j:",
             "journal:",
@@ -1186,7 +1337,14 @@ class PhotonAdapter(BasePlatformAdapter):
         )
         if lowered.startswith(prefixes):
             return True
-        exact = {"where was i", "where was i?", "what am i doing", "what am i doing?"}
+        exact = {
+            "where was i", "where was i?", "where am i", "where am i?",
+            "where am i on my tasks", "where am i on my tasks?",
+            "what am i doing", "what am i doing?",
+            "what reminders do i have", "what reminders do i have?",
+            "what are my reminders", "what are my reminders?", "reminders today",
+            "reminders this week",
+        }
         return lowered in exact
 
     async def _assert_cloud_project_safe(self) -> bool:
@@ -1208,7 +1366,16 @@ class PhotonAdapter(BasePlatformAdapter):
                 resp = await client.get(
                     url,
                     headers={
-                        "Authorization": f"Bearer {self._project_secret}",
+                        # Spectrum Cloud REST uses HTTP Basic id:secret (same
+                        # scheme the spectrum-ts sidecar uses), NOT Bearer. A
+                        # Bearer header 401s here even with valid creds. This
+                        # is only the read-only project-type probe; the sidecar
+                        # gRPC transport is unaffected by this header.
+                        "Authorization": "Basic " + base64.b64encode(
+                            f"{self._project_id}:{self._project_secret}".encode(
+                                "utf-8"
+                            )
+                        ).decode("ascii"),
                         "Accept": "application/json",
                     },
                 )
@@ -2728,6 +2895,12 @@ def register(ctx) -> None:
         # as PII-sensitive so they get redacted before reaching the LLM
         # (matches iMessage handling in _PII_SAFE_PLATFORMS).
         pii_safe=True,
+        # iMessage is Seb's clean personal inbox: suppress status/progress/
+        # lifecycle chatter and never nag it to become a cron home channel.
+        clean_inbox=True,
+        # Own Photon outbound shaping (secret redaction + internal-notice
+        # suppression) instead of a hardcoded core branch.
+        outbound_sanitize_fn=_outbound_sanitize,
         allow_update_command=True,
         platform_hint=(
             "You are communicating via Photon Spectrum (iMessage). "
