@@ -67,6 +67,37 @@ def _stable_prompt(agent):
         return build_system_prompt_parts(agent)["stable"]
 
 
+def _context_prompt(agent):
+    with (
+        patch("run_agent.load_soul_md", return_value=""),
+        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_environment_hints", return_value=""),
+        patch("run_agent.build_context_files_prompt", return_value=""),
+    ):
+        return build_system_prompt_parts(agent)["context"]
+
+
+class TestAthenaGoalsInjection:
+    def test_block_injected_into_context_tier(self, monkeypatch):
+        monkeypatch.delenv("TERMINAL_CWD", raising=False)
+        block = "# Athena Operating Goals\nNorth star: deposit $30K/month."
+        agent = _make_agent(_athena_goals_block=block)
+        assert block in _context_prompt(agent)
+
+    def test_absent_when_block_empty(self, monkeypatch):
+        monkeypatch.delenv("TERMINAL_CWD", raising=False)
+        agent = _make_agent(_athena_goals_block="")
+        assert "Athena Operating Goals" not in _context_prompt(agent)
+
+    def test_safe_when_attr_missing(self, monkeypatch):
+        # getattr default keeps assembly working for agents init'd before the
+        # goals-injection feature existed.
+        monkeypatch.delenv("TERMINAL_CWD", raising=False)
+        agent = _make_agent()
+        delattr(agent, "_athena_goals_block") if hasattr(agent, "_athena_goals_block") else None
+        assert isinstance(_context_prompt(agent), str)
+
+
 class TestCodingContextBlock:
     def test_injected_when_active(self, monkeypatch, tmp_path):
         import subprocess

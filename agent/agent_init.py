@@ -1270,6 +1270,30 @@ def init_agent(
         _platform_hints_cfg = {}
     agent._platform_hint_overrides = _platform_hints_cfg
 
+    # Athena operating-goals injection (config.yaml → athena.goals_injection).
+    # Renders the sebOS-owned athena_goals.json into a compact north-star block
+    # so the live prompt reflects Seb's current 12 goals + 90-day priorities
+    # instead of stale profile assumptions. Self-healing: re-read at each agent
+    # init, so updating the goals file takes effect on the next turn with no
+    # restart. Default on; disable with athena.goals_injection: false.
+    agent._athena_goals_block = ""
+    try:
+        _athena_cfg = _agent_cfg.get("athena", {})
+        if not isinstance(_athena_cfg, dict):
+            _athena_cfg = {}
+        if _athena_cfg.get("goals_injection", True):
+            _goals_file = (
+                _athena_cfg.get("goals_file") or "sebos/state/athena_goals.json"
+            )
+            if os.path.isabs(_goals_file):
+                _goals_path = _goals_file
+            else:
+                _goals_path = get_hermes_home() / _goals_file
+            from agent.prompt_builder import build_athena_goals_prompt
+            agent._athena_goals_block = build_athena_goals_prompt(_goals_path)
+    except Exception as _ag_err:
+        _ra().logger.debug("Athena goals injection skipped: %s", _ag_err)
+
     # App-level API retry count (wraps each model API call).  Default 3,
     # overridable via agent.api_max_retries in config.yaml.  See #11616.
     try:

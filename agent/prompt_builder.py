@@ -1644,6 +1644,85 @@ def load_soul_md(context_length: Optional[int] = None) -> Optional[str]:
         return None
 
 
+def build_athena_goals_prompt(goals_path, max_chars: int = 2800) -> str:
+    """Render a compact Athena operating-goals block from athena_goals.json.
+
+    sebOS owns the goals file (``state/athena_goals.json``); this renders a
+    tight, prompt-ready north-star block so the live Athena prompt reflects
+    Seb's current 12 goals + 90-day priorities instead of stale profile
+    assumptions baked into SOUL.md. Treated as trusted local profile data
+    (like USER.md), so it is length-capped but not threat-scanned. Returns
+    ``""`` on any missing/invalid input so it can never break prompt assembly.
+    """
+    try:
+        path = Path(goals_path)
+        if not path.exists():
+            return ""
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug("Could not read athena goals from %s: %s", goals_path, e)
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    goals = data.get("goals")
+    if not isinstance(goals, list) or not goals:
+        return ""
+
+    def _clip(text, n):
+        text = " ".join(str(text or "").split())
+        return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+    lines = ["# Athena Operating Goals (current 12-month north star)"]
+    captured = data.get("captured_at")
+    src = "sebOS athena_goals.json"
+    if captured:
+        src += f", captured {captured}"
+    lines.append(f"Source: {src}. Live data wins over stale snapshots.")
+    north = _clip(data.get("north_star"), 320)
+    if north:
+        lines.append(f"North star: {north}")
+
+    lines.append("")
+    lines.append("Goals:")
+    for g in goals:
+        if not isinstance(g, dict):
+            continue
+        goal = _clip(g.get("goal"), 130)
+        if not goal:
+            continue
+        lane = str(g.get("lane") or "").strip()
+        lines.append(f"- [{lane}] {goal}" if lane else f"- {goal}")
+
+    prios = data.get("current_90_day_priorities")
+    if isinstance(prios, list) and prios:
+        lines.append("")
+        lines.append("Current 90-day priorities:")
+        for p in prios:
+            if not isinstance(p, dict):
+                continue
+            label = _clip(p.get("priority"), 80)
+            if not label:
+                continue
+            why = _clip(p.get("why"), 120)
+            lines.append(f"- {label}" + (f" — {why}" if why else ""))
+
+    rules = data.get("operating_rules")
+    if isinstance(rules, list) and rules:
+        lines.append("")
+        lines.append("Operating rules:")
+        for r in rules[:4]:
+            r = _clip(r, 160)
+            if r:
+                lines.append(f"- {r}")
+
+    block = "\n".join(lines).strip()
+    if not block:
+        return ""
+    if len(block) > max_chars:
+        block = block[: max_chars - 1].rstrip() + "…"
+    return block
+
+
 def _load_hermes_md(cwd_path: Path, context_length: Optional[int] = None) -> str:
     """.hermes.md / HERMES.md — walk to git root."""
     hermes_md_path = _find_hermes_md(cwd_path)

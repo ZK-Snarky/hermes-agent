@@ -1688,3 +1688,95 @@ Next recommended single unit:
 
 Blockers or decisions needed from Seb:
 - Approval required before staging/committing Athena goals injection, pushing, opening PRs, restarting gateway, editing launchd, live sends, or mutating external systems.
+
+## Unit 23 Athena goals injection review only — 2026-06-21 22:43 MDT
+
+Scope executed:
+- Reviewed only Athena goals injection files:
+  - `/Users/clawdolf/.hermes/hermes-agent/agent/agent_init.py`
+  - `/Users/clawdolf/.hermes/hermes-agent/agent/prompt_builder.py`
+  - `/Users/clawdolf/.hermes/hermes-agent/agent/system_prompt.py`
+  - `/Users/clawdolf/.hermes/hermes-agent/tests/agent/test_prompt_builder.py`
+  - `/Users/clawdolf/.hermes/hermes-agent/tests/agent/test_system_prompt.py`
+- Updated this handoff file with findings only.
+- No commit, no staging, no push/PR/rebase/merge/force-push, no gateway restart, no launchd edit, no live sends, no external mutations, no gateway/Photon/sebOS/hermes-sebos/tools/registry/toolsets edits.
+
+Git status / diff stat at review:
+```bash
+cd /Users/clawdolf/.hermes/hermes-agent
+git status --short
+# M agent/agent_init.py
+# M agent/prompt_builder.py
+# M agent/system_prompt.py
+# M tests/agent/test_prompt_builder.py
+# M tests/agent/test_system_prompt.py
+
+git diff --stat -- agent/agent_init.py agent/prompt_builder.py agent/system_prompt.py tests/agent/test_prompt_builder.py tests/agent/test_system_prompt.py
+# agent/agent_init.py                | 24 ++++++++++++
+# agent/prompt_builder.py            | 79 ++++++++++++++++++++++++++++++++++++++
+# agent/system_prompt.py             |  7 ++++
+# tests/agent/test_prompt_builder.py | 66 +++++++++++++++++++++++++++++++
+# tests/agent/test_system_prompt.py  | 31 +++++++++++++++
+# 5 files changed, 207 insertions(+)
+```
+
+What the Athena goals injection does:
+- Reads `athena.goals_injection` from config at agent init, defaulting to enabled.
+- Reads `athena.goals_file`, defaulting to `sebos/state/athena_goals.json` under `get_hermes_home()`.
+- Renders a compact `# Athena Operating Goals` block from sebOS-owned JSON with captured timestamp, north star, goals, 90-day priorities, and operating rules.
+- Stores the rendered text on `agent._athena_goals_block`.
+- Adds that block to the system prompt context tier in `build_system_prompt_parts(...)`.
+- Fails closed: missing/malformed/empty goals return `""`; init catches errors and logs debug only; output is length capped.
+
+Docs / migration comparison:
+- Official Hermes configuration/profile docs say `~/.hermes/config.yaml`, `.env`, `SOUL.md`, memories, skills, sessions, cron, and logs are per-profile state; profiles are isolated by `HERMES_HOME`; `SOUL.md` is personality/instructions and takes effect on new sessions.
+- Official plugin docs say plugins add tools, hooks, slash commands, CLI commands, bundled skills, platforms, and can use `pre_llm_call` to inject context into the user message. `ctx.inject_message` is CLI-only and not a gateway-context solution.
+- Official MCP docs say MCP is the cleanest way to connect Hermes to external/local tool servers, including tools/resources/prompts, with config-level enable/filter controls.
+- Migration docs already flag current Athena goals injection as core local fork debt: `BOUNDARY_RULES.md` says Hermes core must not hardcode Seb/Athena/sebOS-specific behavior; `MIGRATION_PLAN.md` P4 says move Athena goals/prompt injection out of core if official docs support config/profile/skills/plugin context; `TARGET_ARCHITECTURE.md` says Athena identity/persona belongs in config/SOUL/system prompt/skills/memory, not generic core, and sebOS owns durable goals/state.
+
+Placement decision:
+- Long-term: not Hermes core. It is Seb/Athena/sebOS-specific and reads a sebOS state file directly.
+- Best long-term target: sebOS MCP resource or prompt, exposed as a read-only `athena_goals` resource/prompt, plus a generic Hermes context-injection extension point if stable-system-prompt context is required.
+- Near-term acceptable target: user plugin/context hook if Hermes adds or stabilizes a hook for prompt-context injection into the system/context tier. Current plugin `pre_llm_call` injects into the user message, which is probably not equivalent for a north-star block.
+- Config/profile role: config should only hold enablement and path. `SOUL.md`/USER/MEMORY can carry stable identity rules, but should not duplicate live goals because the goals are sebOS-owned and intentionally change.
+- Skill/memory role: not appropriate as the source of truth. Skills are procedures; memory is compact stable facts; current 90-day priorities are too live/stale-prone.
+
+Temporary as-is verdict:
+- Clean and scoped enough to commit only after explicit approval, but not clean enough architecturally to call final. It is a local compatibility shim.
+- Reason to keep temporarily: it gives every new agent turn the current sebOS goals without manual memory drift; it is config-gated, profile-scoped via `get_hermes_home()`, length-capped, and tests cover missing/malformed/empty files plus injection placement.
+- Reason not to keep long-term: it bakes Athena/sebOS behavior into generic Hermes prompt assembly and directly reads a sebOS file from core.
+
+Risks:
+- Core drift: Seb-specific goals in generic agent init/prompt code.
+- Prompt-cache churn: if goals JSON changes often, stable/context prompt content changes and may reduce cache reuse. Current code reads at agent init/turn, not every token, but each new agent init can pick up changes.
+- Trust boundary: treats local JSON as trusted profile data and does not threat-scan it. Acceptable only if sebOS is the owner and file permissions/source are trusted.
+- Freshness semantics: default-on means a missing/broken goals file silently omits the block. This is safe but can hide stale/absent goals unless monitored elsewhere.
+
+Tests run:
+```bash
+cd /Users/clawdolf/.hermes/hermes-agent
+python -m pytest tests/agent/test_prompt_builder.py tests/agent/test_system_prompt.py -q -o 'addopts='
+# 167 passed, 1 skipped, 1 warning in 6.72s
+
+python -m py_compile agent/agent_init.py agent/prompt_builder.py agent/system_prompt.py tests/agent/test_prompt_builder.py tests/agent/test_system_prompt.py
+# passed, no output
+```
+
+Temporary local shim debt marker:
+- Seb approved committing this as a temporary local compatibility shim on 2026-06-21 22:54 MDT.
+- This is not the final architecture. It remains local fork debt because generic Hermes core should not own Athena/sebOS-specific goal retrieval or prompt context.
+- Keep it only to preserve current Athena behavior while the proper context-provider boundary is designed.
+
+Future migration target:
+- Move Athena goals retrieval to a `hermes-sebos` plugin context provider or a sebOS MCP/resource/prompt.
+- Keep sebOS as the source of truth for `athena_goals.json` and expose read-only formatted goals through that boundary.
+- Add or use a generic Hermes context-provider hook that can inject trusted profile/plugin context into the stable/context system prompt tier without hardcoding Athena.
+- After parity tests pass, remove direct sebOS file reads from `agent_init.py` and core prompt plumbing.
+
+Commit package requested:
+- Stage and commit only: `agent/agent_init.py`, `agent/prompt_builder.py`, `agent/system_prompt.py`, `tests/agent/test_prompt_builder.py`, `tests/agent/test_system_prompt.py`, and `MIGRATION_HANDOFF.md`.
+- Commit message: `feat(athena): inject sebOS goals context behind config gate`.
+
+Blockers or decisions needed from Seb:
+- No blocker for this temporary shim commit after required focused tests, `py_compile`, and `git diff --cached --check` pass.
+- Approval still required before push/PR/rebase/merge/force-push, gateway restart, launchd edit, live sends, external mutations, or the future plugin/MCP migration unit.

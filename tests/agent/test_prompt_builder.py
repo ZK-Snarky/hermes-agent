@@ -10,6 +10,7 @@ import pytest
 from agent.prompt_builder import (
     _scan_context_content,
     _truncate_content,
+    build_athena_goals_prompt,
     _parse_skill_file,
     _skill_should_show,
     _find_hermes_md,
@@ -35,6 +36,71 @@ from agent.prompt_builder import (
     WSL_ENVIRONMENT_HINT,
 )
 from hermes_cli.nous_subscription import NousFeatureState, NousSubscriptionFeatures
+
+
+# =========================================================================
+# Athena operating-goals injection
+# =========================================================================
+
+
+import json as _json
+
+
+_ATHENA_GOALS_FIXTURE = {
+    "captured_at": "2026-06-20",
+    "north_star": "Use these 12 goals as Athena's current 12-month operating context.",
+    "goals": [
+        {"id": "deposit_30k_month", "lane": "business_money",
+         "goal": "Consistently deposit over $30K/month for over 6 months."},
+        {"id": "tacoma_build", "lane": "personal_asset",
+         "goal": "Purchase a 4th-generation Tacoma and begin major upgrades."},
+    ],
+    "current_90_day_priorities": [
+        {"id": "deposit_30k_month", "priority": "Deposit over $30K/month",
+         "why": "This funds the rest of the year."},
+    ],
+    "operating_rules": [
+        "Athena should use these goals as the current north star.",
+        "When data conflicts with old memory, live data and these goals win.",
+    ],
+}
+
+
+class TestAthenaGoalsPrompt:
+    def _write(self, tmp_path, data):
+        p = tmp_path / "athena_goals.json"
+        p.write_text(_json.dumps(data), encoding="utf-8")
+        return p
+
+    def test_renders_north_star_goals_and_priorities(self, tmp_path):
+        block = build_athena_goals_prompt(self._write(tmp_path, _ATHENA_GOALS_FIXTURE))
+        assert "Athena Operating Goals" in block
+        assert "current 12-month operating context" in block
+        assert "Consistently deposit over $30K/month" in block
+        assert "[personal_asset]" in block
+        assert "Current 90-day priorities:" in block
+        assert "Deposit over $30K/month" in block
+        assert "Operating rules:" in block
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        assert build_athena_goals_prompt(tmp_path / "nope.json") == ""
+
+    def test_malformed_json_returns_empty(self, tmp_path):
+        p = tmp_path / "athena_goals.json"
+        p.write_text("{not valid json", encoding="utf-8")
+        assert build_athena_goals_prompt(p) == ""
+
+    def test_no_goals_returns_empty(self, tmp_path):
+        p = self._write(tmp_path, {"captured_at": "2026-06-20", "goals": []})
+        assert build_athena_goals_prompt(p) == ""
+
+    def test_length_cap_enforced(self, tmp_path):
+        big = dict(_ATHENA_GOALS_FIXTURE)
+        big["goals"] = [
+            {"id": f"g{i}", "lane": "lane", "goal": "x" * 200} for i in range(50)
+        ]
+        block = build_athena_goals_prompt(self._write(tmp_path, big), max_chars=600)
+        assert len(block) <= 600
 
 
 # =========================================================================

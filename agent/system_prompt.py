@@ -418,6 +418,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         if context_files_prompt:
             context_parts.append(context_files_prompt)
 
+    # Athena operating-goals block (sebOS athena_goals.json → compact north
+    # star). Rendered once at agent init; injected every session so the live
+    # prompt reflects the current 12 goals instead of stale assumptions.
+    _athena_goals_block = getattr(agent, "_athena_goals_block", "")
+    if _athena_goals_block:
+        context_parts.append(_athena_goals_block)
+
     # ── Volatile tier (changes per session/turn — never cached) ───
     volatile_parts: List[str] = []
 
