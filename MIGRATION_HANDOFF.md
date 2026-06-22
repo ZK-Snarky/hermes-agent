@@ -1644,3 +1644,47 @@ Next recommended single unit:
 
 Blockers or decisions needed from Seb:
 - Approval required before staging/committing remaining Athena goals or session/Photon guard packages, pushing, opening PRs, restarting gateway, editing launchd, live sends, or mutating external systems.
+
+## Unit 22 session/Photon guard fixes package — 2026-06-21 22:29 MDT
+
+Scope executed:
+- Packaged only session/Photon guard fixes and directly related tests.
+- Did not touch Athena goals injection, committed gateway/platform hooks, sebOS, `hermes-sebos`, live config, gateway process, launchd, or external systems.
+
+Files in package:
+- `/Users/clawdolf/.hermes/hermes-agent/gateway/session.py`
+  - Removes stale iMessage/BlueBubbles platform note text from the Discord branch so iMessage-specific bubble guidance cannot leak into Discord session prompts.
+- `/Users/clawdolf/.hermes/hermes-agent/tests/gateway/test_session.py`
+  - Adds regression assertion that Discord session prompts do not contain iMessage guidance.
+- `/Users/clawdolf/.hermes/hermes-agent/tests/plugins/platforms/photon/test_shared_cloud_guard.py`
+  - Updates Photon shared-cloud guard expectation to HTTP Basic `project_id:project_secret`, matching Spectrum/sidecar auth behavior and preserving fail-closed guard coverage.
+- `/Users/clawdolf/.hermes/hermes-agent/MIGRATION_HANDOFF.md`
+  - This handoff entry.
+
+Verification run before commit:
+```bash
+cd /Users/clawdolf/.hermes/hermes-agent
+python -m pytest tests/gateway/test_session.py tests/plugins/platforms/photon/test_shared_cloud_guard.py -q -o 'addopts='
+# 83 passed in 3.24s
+
+python -m py_compile gateway/session.py tests/gateway/test_session.py tests/plugins/platforms/photon/test_shared_cloud_guard.py
+# passed, no output
+```
+
+Classification:
+- Session prompt safety: removes stale platform guidance from the wrong platform branch.
+- Photon shared-cloud guard test correction: verifies the guard uses the real Basic auth header shape while still failing closed for unsafe shared-cloud iMessage mode.
+- Related tests only: `test_session.py` and Photon shared-cloud guard tests.
+
+Rollback notes:
+- Revert this commit to restore prior prompt text and prior Bearer-header test expectation.
+- Runtime risk is low: no live sends or gateway restart happened; tests only exercise prompt construction and mocked Photon HTTP calls.
+
+Remaining dirty Hermes work after this package:
+- Athena goals injection: `agent/agent_init.py`, `agent/prompt_builder.py`, `agent/system_prompt.py`, `tests/agent/test_prompt_builder.py`, `tests/agent/test_system_prompt.py`.
+
+Next recommended single unit:
+- Review/package Athena goals injection separately. It touches prompt/context architecture and should get its own focused review before commit.
+
+Blockers or decisions needed from Seb:
+- Approval required before staging/committing Athena goals injection, pushing, opening PRs, restarting gateway, editing launchd, live sends, or mutating external systems.

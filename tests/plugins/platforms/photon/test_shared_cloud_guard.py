@@ -6,6 +6,7 @@ operator explicitly opts into unsafe diagnostics.
 """
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import pytest
@@ -61,7 +62,12 @@ async def test_shared_cloud_project_fails_closed(monkeypatch: pytest.MonkeyPatch
     assert adapter.fatal_error_code == "SHARED_CLOUD_UNSAFE"
     assert adapter.fatal_error_retryable is False
     assert "server-side fallback/offline texts" in (adapter.fatal_error_message or "")
-    assert _TypeClient.calls[-1]["kwargs"]["headers"]["Authorization"] == "Bearer test-project-secret"
+    # Spectrum Cloud REST uses HTTP Basic id:secret (matches the spectrum-ts
+    # sidecar); a Bearer header 401s even with valid creds.
+    expected_auth = "Basic " + base64.b64encode(
+        b"test-project-id:test-project-secret"
+    ).decode("ascii")
+    assert _TypeClient.calls[-1]["kwargs"]["headers"]["Authorization"] == expected_auth
 
 
 @pytest.mark.asyncio

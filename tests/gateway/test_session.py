@@ -215,6 +215,10 @@ class TestBuildSessionContextPrompt:
 
         assert "Discord" in prompt
         assert "cannot search" in prompt.lower() or "do not have access" in prompt.lower()
+        # Regression: the iMessage bubble guidance must not leak into Discord
+        # sessions. It was orphaned into the Discord branch when the
+        # BlueBubbles platform branch was removed.
+        assert "responding via iMessage" not in prompt
 
     def test_slack_prompt_includes_platform_notes(self):
         config = GatewayConfig(
