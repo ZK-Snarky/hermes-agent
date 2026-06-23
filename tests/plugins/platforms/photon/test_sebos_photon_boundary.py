@@ -186,6 +186,38 @@ async def test_add_reminder_builds_legacy_cli_contract(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_update_reminder_builds_legacy_cli_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary = _load_boundary_module()
+    calls = []
+
+    async def fake_run(*args, stdin=None, timeout=20.0):
+        calls.append((args, stdin, timeout))
+        return {"status": "ok", "title": "File LLC paperwork", "returncode": 0}
+
+    monkeypatch.setattr(boundary, "run_sebos_json", fake_run)
+
+    result = await boundary.update_reminder(
+        "llc",
+        due="2026-06-24 09:00",
+        timeout=45.0,
+    )
+
+    assert result["title"] == "File LLC paperwork"
+    assert calls == [
+        (
+            (
+                "sebos-update-reminder",
+                "llc",
+                "--due",
+                "2026-06-24 09:00",
+            ),
+            None,
+            45.0,
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ingest_journal_builds_legacy_cli_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     boundary = _load_boundary_module()
     calls = []
