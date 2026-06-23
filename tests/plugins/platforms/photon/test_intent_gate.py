@@ -330,7 +330,7 @@ async def test_audio_journal_ingest_routes_through_boundary_facade(
     adapter = _make_adapter(monkeypatch)
     audio = tmp_path / "Audio Message.caf"
     audio.write_bytes(b"fake-audio")
-    ingests: List[Tuple[str, str, str | None, float, Dict[str, Any]]] = []
+    ingests: List[Tuple[str, str, str | None, float, Dict[str, Any], str | None]] = []
     acks: List[Tuple[str, str | None, str]] = []
 
     class FakeBoundary:
@@ -341,10 +341,11 @@ async def test_audio_journal_ingest_routes_through_boundary_facade(
             source: str = "photon",
             sender: str | None = None,
             timeout: float = 360.0,
+            date: str | None = None,
         ):
             with open(payload_path, encoding="utf-8") as fh:
                 payload = json.load(fh)
-            ingests.append((payload_path, source, sender, timeout, payload))
+            ingests.append((payload_path, source, sender, timeout, payload, date))
             return {"inserted": 1, "transcribed_ok": 1}
 
     async def fake_prompt_date(message_dt: datetime) -> str:
@@ -378,10 +379,11 @@ async def test_audio_journal_ingest_routes_through_boundary_facade(
 
     assert handled is True
     assert len(ingests) == 1
-    payload_path, source, sender, timeout, payload = ingests[0]
+    payload_path, source, sender, timeout, payload, date = ingests[0]
     assert source == "photon"
     assert sender == "+15555550100"
     assert timeout == 360.0
+    assert date == "2026-06-20"
     assert payload_path.endswith(".json")
     attachment = payload["messages"][0]["attachments"][0]
     assert attachment["path"] == str(audio)
@@ -433,10 +435,57 @@ async def test_audio_journal_ingest_falls_back_to_old_runner(
     assert len(calls) == 1
     args, stdin, timeout = calls[0]
     assert args[0] == "sebos-ingest-journal"
-    assert args[2:] == ("--source", "photon", "--sender", "+15555550100")
+    assert args[2:] == ("--source", "photon", "--sender", "+15555550100", "--date", "2026-06-20")
     assert stdin is None
     assert timeout == 360.0
     assert sent == [("space-1", "Audio received, but transcription failed.")]
+
+
+@pytest.mark.asyncio
+async def test_audio_journal_ingests_without_active_prompt_instead_of_chat_fallthrough(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    adapter = _make_adapter(monkeypatch)
+    audio = tmp_path / "clip.caf"
+    audio.write_bytes(b"fake-audio")
+    calls: List[Tuple[Tuple[str, ...], str | None, float]] = []
+    acks: List[Tuple[str, str | None, str]] = []
+
+    async def no_prompt(message_dt: datetime) -> None:
+        return None
+
+    async def fake_copy(path: str, message_id: str | None) -> str:
+        return path
+
+    async def fake_run(*args: str, stdin: str | None = None, timeout: float = 20.0):
+        calls.append((args, stdin, timeout))
+        return {"inserted": 1, "transcribed_ok": 1}
+
+    async def fake_ack(chat_id: str, message_id: str | None, emoji: str) -> bool:
+        acks.append((chat_id, message_id, emoji))
+        return True
+
+    monkeypatch.setattr(adapter, "_active_journal_prompt_date", no_prompt)
+    monkeypatch.setattr(adapter, "_copy_audio_to_sebos_inbox", fake_copy)
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: None)
+    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_send_ack_reaction", fake_ack)
+
+    handled = await adapter._try_ingest_audio_journal_reply(
+        space_id="space-1",
+        sender_id="+155****0100",
+        message_id="msg-1",
+        text="(voice)",
+        timestamp=datetime(2026, 6, 23, 9, 10, tzinfo=timezone.utc),
+        media_urls=[str(audio)],
+        media_types=["audio/x-caf"],
+    )
+
+    assert handled is True
+    args, _, _ = calls[0]
+    assert "--date" not in args
+    assert acks == [("space-1", "msg-1", "❤️")]
 
 
 @pytest.mark.asyncio

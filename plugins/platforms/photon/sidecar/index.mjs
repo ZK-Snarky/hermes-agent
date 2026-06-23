@@ -431,6 +431,36 @@ async function normalizeBinaryContent(content) {
   return meta;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function contentIsMarkerOnly(content) {
+  if (!content || typeof content !== "object") return false;
+  if (content.type === "text") {
+    const text = String(content.text || "").replace(/\uFFFC/g, "").trim();
+    return String(content.text || "").includes("\uFFFC") && text === "";
+  }
+  if (content.type === "group") {
+    const items = Array.isArray(content.items) ? content.items : [];
+    if (!items.length) return false;
+    return items.every((item) => contentIsMarkerOnly(item?.content));
+  }
+  return false;
+}
+
+function contentHasBinaryPayload(content) {
+  if (!content || typeof content !== "object") return false;
+  if (content.type === "attachment" || content.type === "voice") return true;
+  if (content.type === "group") {
+    return (Array.isArray(content.items) ? content.items : []).some((item) =>
+      contentHasBinaryPayload(item?.content)
+    );
+  }
+  if (content.type === "reply") return contentHasBinaryPayload(content.content);
+  return false;
+}
+
 async function normalizeContent(content) {
   if (!content || typeof content !== "object") {
     return { type: "unknown" };
@@ -495,22 +525,48 @@ function replyMetadataFromMessage(message, normalizedContent) {
 
 async function normalizeEvent(space, message) {
   try {
-    const msgSpace = message.space || {};
-    const ts = message.timestamp;
-    const normalizedContent = await normalizeContent(message.content);
-    const replyMeta = replyMetadataFromMessage(message, normalizedContent);
+    let sourceMessage = message;
+    let normalizedContent = await normalizeContent(sourceMessage.content);
+    if (contentIsMarkerOnly(normalizedContent) && sourceMessage?.id && typeof space?.getMessage === "function") {
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await sleep(250);
+        let fetched;
+        try {
+          fetched = await space.getMessage(sourceMessage.id);
+        } catch (e) {
+          console.error(
+            "photon-sidecar: marker-only attachment rehydrate failed: " +
+              (e && e.message ? e.message : String(e))
+          );
+          continue;
+        }
+        if (!fetched) continue;
+        const fetchedContent = await normalizeContent(fetched.content);
+        if (contentHasBinaryPayload(fetchedContent) || !contentIsMarkerOnly(fetchedContent)) {
+          console.error(
+            `photon-sidecar: rehydrated marker-only message ${sourceMessage.id} through space.getMessage`
+          );
+          sourceMessage = fetched;
+          normalizedContent = fetchedContent;
+          break;
+        }
+      }
+    }
+    const msgSpace = sourceMessage.space || {};
+    const ts = sourceMessage.timestamp;
+    const replyMeta = replyMetadataFromMessage(sourceMessage, normalizedContent);
     return {
-      messageId: message.id ?? null,
+      messageId: sourceMessage.id ?? null,
       replyToMessageId: replyMeta.replyToMessageId,
       threadRootMessageId: replyMeta.threadRootMessageId,
-      platform: message.platform || space.__platform || "iMessage",
+      platform: sourceMessage.platform || space.__platform || "iMessage",
       space: {
         id: space.id ?? msgSpace.id ?? null,
         // iMessage spaces carry `type` ("dm"|"group") and `phone` directly.
         type: space.type ?? msgSpace.type ?? "dm",
         phone: space.phone ?? msgSpace.phone ?? null,
       },
-      sender: { id: message.sender ? message.sender.id : null },
+      sender: { id: sourceMessage.sender ? sourceMessage.sender.id : null },
       content: normalizedContent,
       timestamp:
         ts instanceof Date ? ts.toISOString() : ts ? String(ts) : null,

@@ -95,6 +95,10 @@ _SEBOS_BIN_DIR = _SEBOS_ROOT / "bin"
 _SEBOS_DB_PATH = _SEBOS_ROOT / "sebos.db"
 _SEBOS_AUDIO_INBOX = _SEBOS_ROOT / "inbox" / "audio"
 _DOCUMENT_CACHE_DIR = Path.home() / ".hermes" / "cache" / "documents"
+_AUDIO_CACHE_DIRS = (
+    Path.home() / ".hermes" / "audio_cache",
+    Path.home() / ".hermes" / "cache" / "audio",
+)
 _HERMES_SEBOS_PHOTON_BOUNDARY = Path.home() / ".hermes" / "plugins" / "hermes-sebos" / "photon_boundary.py"
 _SEBOS_FALLBACK_COMMAND_ALLOWLIST = frozenset(
     {
@@ -778,30 +782,45 @@ class PhotonAdapter(BasePlatformAdapter):
             timeout=45.0,
         )
 
-    async def _ingest_journal_payload(self, payload_path: str, *, sender_id: str) -> Dict[str, Any]:
+    async def _ingest_journal_payload(
+        self,
+        payload_path: str,
+        *,
+        sender_id: str,
+        entry_date: str | None = None,
+    ) -> Dict[str, Any]:
         """Ingest a prepared journal payload through plugin facade with fallback."""
         boundary = _load_sebos_photon_boundary()
         ingest_journal = getattr(boundary, "ingest_journal", None) if boundary else None
         if ingest_journal is not None:
             try:
-                return await ingest_journal(
-                    payload_path,
-                    source="photon",
-                    sender=sender_id,
-                    timeout=360.0,
+                kwargs: Dict[str, Any] = {
+                    "source": "photon",
+                    "sender": sender_id,
+                    "timeout": 360.0,
+                }
+                if entry_date:
+                    kwargs["date"] = entry_date
+                return await ingest_journal(payload_path, **kwargs)
+            except TypeError as exc:
+                logger.warning(
+                    "[photon] hermes-sebos journal facade signature failed; falling back: %s",
+                    exc,
                 )
             except Exception as exc:
                 logger.warning(
                     "[photon] hermes-sebos journal ingest facade failed; falling back: %s",
                     exc,
                 )
-        return await self._run_sebos_json(
+        args = [
             "sebos-ingest-journal",
             payload_path,
             "--source", "photon",
             "--sender", sender_id,
-            timeout=360.0,
-        )
+        ]
+        if entry_date:
+            args.extend(["--date", entry_date])
+        return await self._run_sebos_json(*args, timeout=360.0)
 
     @staticmethod
     def _reminder_payload_args(payload: Dict[str, str]) -> List[str]:
@@ -830,23 +849,30 @@ class PhotonAdapter(BasePlatformAdapter):
         normalized Photon event has no attachment payload, so recover the audio
         file by timestamp before the normal agent chat path sees a blank marker.
         """
-        if not _DOCUMENT_CACHE_DIR.exists():
+        cache_dirs = [_DOCUMENT_CACHE_DIR, *_AUDIO_CACHE_DIRS]
+        if not any(cache_dir.exists() for cache_dir in cache_dirs):
             return None
         exts = {".caf", ".m4a", ".mp3", ".aac", ".mp4", ".wav"}
         candidates: list[tuple[float, Path]] = []
         msg_ts = message_dt.timestamp()
         now = time.time()
-        for path in _DOCUMENT_CACHE_DIR.iterdir():
-            if not path.is_file() or path.suffix.lower() not in exts:
+        for cache_dir in cache_dirs:
+            if not cache_dir.exists():
                 continue
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            # Trust only files created near the inbound marker and recently.
-            delta = abs(stat.st_mtime - msg_ts)
-            if delta <= 180 and now - stat.st_mtime <= 900:
-                candidates.append((delta, path))
+            for path in cache_dir.iterdir():
+                if not path.is_file() or path.suffix.lower() not in exts:
+                    continue
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                delta = abs(stat.st_mtime - msg_ts)
+                # Only recover files close to the marker's timestamp and freshly
+                # cached. This prevents an unrelated older voice note from being
+                # attached to a blank marker after a delayed replay.
+                if delta <= 180 and now - stat.st_mtime <= 900:
+                    candidates.append((delta, path))
+
         if not candidates:
             return None
         candidates.sort(key=lambda item: item[0])
@@ -865,7 +891,9 @@ class PhotonAdapter(BasePlatformAdapter):
     ) -> bool:
         prompt_date = await self._active_journal_prompt_date(timestamp)
         if not prompt_date:
-            return False
+            logger.info(
+                "[photon] ingesting preauthorized audio journal without active prompt; using journal default date"
+            )
         if not media_urls and "\ufffc" in text:
             # Last-resort recovery only: the docs-correct path is the sidecar
             # promoting audio-named attachments to ``voice`` so the next event
@@ -943,7 +971,11 @@ class PhotonAdapter(BasePlatformAdapter):
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh)
-            result = await self._ingest_journal_payload(tmp_name, sender_id=sender_id)
+            result = await self._ingest_journal_payload(
+                tmp_name,
+                sender_id=sender_id,
+                entry_date=prompt_date,
+            )
         finally:
             try:
                 os.unlink(tmp_name)

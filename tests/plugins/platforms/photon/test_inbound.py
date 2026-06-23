@@ -426,6 +426,31 @@ def test_recent_audio_document_for_marker_is_last_resort(
     assert recovered == str(caf_path)
 
 
+def test_recent_audio_document_for_marker_checks_audio_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from datetime import datetime, timezone
+    import os
+    import time
+
+    import plugins.platforms.photon.adapter as adapter_mod
+
+    documents = tmp_path / "documents"
+    audio_cache = tmp_path / "audio_cache"
+    documents.mkdir()
+    audio_cache.mkdir()
+    monkeypatch.setattr(adapter_mod, "_DOCUMENT_CACHE_DIR", documents)
+    monkeypatch.setattr(adapter_mod, "_AUDIO_CACHE_DIRS", (audio_cache,))
+
+    caf_path = audio_cache / "audio_abc123.caf"
+    caf_path.write_bytes(b"caf-payload")
+    now = time.time()
+    os.utime(caf_path, (now, now))
+    near = datetime.fromtimestamp(now - 10, tz=timezone.utc)
+
+    assert adapter_mod.PhotonAdapter._recent_audio_document_for_marker(near) == str(caf_path)
+
+
 @pytest.mark.asyncio
 async def test_on_inbound_line_dispatches_and_dedups(
     monkeypatch: pytest.MonkeyPatch,

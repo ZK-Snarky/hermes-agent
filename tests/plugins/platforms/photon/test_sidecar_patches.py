@@ -72,3 +72,19 @@ def test_catchup_rate_limit_patch_fails_closed_on_sdk_drift(tmp_path: Path) -> N
     )
     assert proc.returncode == 1
     assert "could not find isCursorRejectedIMessageError" in proc.stderr
+
+
+def test_sidecar_rehydrates_marker_only_imessage_audio() -> None:
+    source = (
+        Path(__file__).parents[4]
+        / "plugins"
+        / "platforms"
+        / "photon"
+        / "sidecar"
+        / "index.mjs"
+    ).read_text(encoding="utf-8")
+
+    assert "contentIsMarkerOnly" in source
+    assert "contentHasBinaryPayload" in source
+    assert "space.getMessage(sourceMessage.id)" in source
+    assert "rehydrated marker-only message" in source
