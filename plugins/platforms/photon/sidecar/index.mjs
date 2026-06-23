@@ -226,6 +226,9 @@ const knownMessages = new Map();
 // /unreact can `unsend()` it later.
 const reactionHandles = new Map();
 const inboundHealth = {
+  state: "starting",
+  lastSubscribeAt: null,
+  lastRecoveryAt: null,
   lastEventAt: null,
   lastErrorAt: null,
   lastError: null,
@@ -240,23 +243,27 @@ function summarizeError(e) {
 }
 
 function inboundHealthPayload() {
-  const now = Date.now();
-  const lastErrorMs = inboundHealth.lastErrorAt
-    ? now - Date.parse(inboundHealth.lastErrorAt)
-    : null;
-  // A recent stream error means inbound iMessages may be invisible even when
-  // the local loopback HTTP server is up. Surface that in health so the nightly
-  // reset/watchdog rail can catch the exact failure Seb hit: Spectrum stream
-  // auth/connect errors with a superficially "running" sidecar.
-  const recentError = lastErrorMs !== null && lastErrorMs < 5 * 60 * 1000;
+  const lastErrorAt = inboundHealth.lastErrorAt ? Date.parse(inboundHealth.lastErrorAt) : null;
+  const lastRecoveryAt = inboundHealth.lastRecoveryAt ? Date.parse(inboundHealth.lastRecoveryAt) : null;
+  const lastEventAt = inboundHealth.lastEventAt ? Date.parse(inboundHealth.lastEventAt) : null;
+  const unrecoveredError = lastErrorAt !== null
+    && (lastRecoveryAt === null || lastRecoveryAt <= lastErrorAt)
+    && (lastEventAt === null || lastEventAt <= lastErrorAt);
+  const endedAfterRecovery = inboundHealth.lastEndAt
+    && (!inboundHealth.lastSubscribeAt || Date.parse(inboundHealth.lastEndAt) >= Date.parse(inboundHealth.lastSubscribeAt));
+  const inboundOk = !unrecoveredError && !endedAfterRecovery;
   return {
-    ok: !recentError,
+    ok: inboundOk,
     inbound: {
-      ok: !recentError,
+      ok: inboundOk,
+      state: inboundHealth.state,
+      lastSubscribeAt: inboundHealth.lastSubscribeAt,
+      lastRecoveryAt: inboundHealth.lastRecoveryAt,
       lastEventAt: inboundHealth.lastEventAt,
       lastErrorAt: inboundHealth.lastErrorAt,
       lastError: inboundHealth.lastError,
       lastEndAt: inboundHealth.lastEndAt,
+      needsInboundProof: inboundHealth.lastEventAt === null,
     },
   };
 }
@@ -524,9 +531,16 @@ async function normalizeEvent(space, message) {
   let backoff = 1000;
   for (;;) {
     try {
+      const subscribedAt = new Date().toISOString();
+      inboundHealth.state = "subscribed";
+      inboundHealth.lastSubscribeAt = subscribedAt;
+      inboundHealth.lastRecoveryAt = subscribedAt;
+      inboundHealth.lastEndAt = null;
       for await (const [space, message] of app.messages) {
         backoff = 1000; // healthy traffic — reset
+        inboundHealth.state = "receiving";
         inboundHealth.lastEventAt = new Date().toISOString();
+        inboundHealth.lastRecoveryAt = inboundHealth.lastEventAt;
         inboundHealth.lastErrorAt = null;
         inboundHealth.lastError = null;
         // Only forward inbound messages (ignore our own outbound echoes).
@@ -539,9 +553,11 @@ async function normalizeEvent(space, message) {
         if (!event) continue;
         await deliver(JSON.stringify(event));
       }
+      inboundHealth.state = "ended";
       inboundHealth.lastEndAt = new Date().toISOString();
       console.error("photon-sidecar: inbound stream ended — re-subscribing");
     } catch (e) {
+      inboundHealth.state = "errored";
       inboundHealth.lastErrorAt = new Date().toISOString();
       inboundHealth.lastError = summarizeError(e);
       console.error(
