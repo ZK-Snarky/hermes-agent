@@ -107,7 +107,6 @@ _SEBOS_FALLBACK_COMMAND_ALLOWLIST = frozenset(
         "sebos-render-mission-control",
         "sebos-journal-pending-prompt",
         "sebos-add-reminder",
-        "sebos-update-reminder",
         "sebos-ingest-journal",
     }
 )
@@ -783,28 +782,6 @@ class PhotonAdapter(BasePlatformAdapter):
             timeout=45.0,
         )
 
-    async def _update_reminder(self, payload: Dict[str, str]) -> Dict[str, Any]:
-        """Update a reminder through plugin facade with fallback."""
-        boundary = _load_sebos_photon_boundary()
-        update_reminder = getattr(boundary, "update_reminder", None) if boundary else None
-        if update_reminder is not None:
-            try:
-                return await update_reminder(
-                    payload["query"],
-                    due=payload.get("due"),
-                    title=payload.get("title"),
-                    timeout=45.0,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[photon] hermes-sebos reminder update facade failed; falling back: %s",
-                    exc,
-                )
-        return await self._run_sebos_json(
-            *self._reminder_update_payload_args(payload),
-            timeout=45.0,
-        )
-
     async def _ingest_journal_payload(
         self,
         payload_path: str,
@@ -860,15 +837,6 @@ class PhotonAdapter(BasePlatformAdapter):
             args.extend(["--radius", payload["radius"]])
         if payload.get("proximity"):
             args.extend(["--proximity", payload["proximity"]])
-        return args
-
-    @staticmethod
-    def _reminder_update_payload_args(payload: Dict[str, str]) -> List[str]:
-        args = ["sebos-update-reminder", payload["query"]]
-        if payload.get("due"):
-            args.extend(["--due", payload["due"]])
-        if payload.get("title"):
-            args.extend(["--title", payload["title"]])
         return args
 
     @staticmethod
@@ -1240,43 +1208,6 @@ class PhotonAdapter(BasePlatformAdapter):
                 "%Y-%m-%d %H:%M"
             )
 
-        def _due_from_date_phrase(phrase: str) -> Optional[str]:
-            phrase = (phrase or "").strip().lower()
-            if re.search(r"\btomorrow\s+morning\b", phrase):
-                return _due(base + timedelta(days=1), 9)
-            if re.search(r"\btomorrow\b", phrase):
-                return _due(base + timedelta(days=1), 9)
-            match = re.search(r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", phrase)
-            if match:
-                hour = 14 if re.search(r"\bafternoon\b", phrase) else 9
-                return _due(_next_weekday(weekdays[match.group(1)]), hour)
-            match = re.search(r"\bin\s+(\d+)\s+(mondays|tuesdays|wednesdays|thursdays|fridays|saturdays|sundays)\b", phrase)
-            if match:
-                ordinal = max(1, int(match.group(1)))
-                weekday = match.group(2).removesuffix("s")
-                return _due(_next_weekday(weekdays[weekday], ordinal=ordinal), 9)
-            match = re.search(r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", phrase)
-            if match:
-                return _due(_next_weekday(weekdays[match.group(1)]), 9)
-            return None
-
-        update_match = re.search(
-            r"\b(?:adjust|change|move|reschedule|update)\s+(?:the\s+)?(?P<query>.+?)\s+reminder\s+(?:to|for|on|until)\s+(?P<date>.+?)\s*$",
-            lowered,
-        )
-        if update_match:
-            due = _due_from_date_phrase(update_match.group("date"))
-            query = update_match.group("query").strip(" .")
-            query = re.sub(r"^(?:hey\s+)?(?:can\s+you\s+|please\s+|athena\s+)", "", query).strip(" .")
-            if due and query:
-                return _intent(
-                    intent="reminder_update",
-                    query=query,
-                    due_datetime=due,
-                    title="",
-                )
-            return _clarify("Which reminder should I update, and when should it be due?")
-
         if re.search(r"\btomorrow\s+morning\b", lowered):
             return _intent(due_datetime=_due(base + timedelta(days=1), 9))
 
@@ -1315,18 +1246,16 @@ class PhotonAdapter(BasePlatformAdapter):
             "Return JSON only. Do not chat. Do not invent missing dates. "
             "Use intent chat for questions, advice, planning, unclear notes, or anything messy. "
             "Use intent reminder only when the message asks to be reminded and a concrete due time/date or location trigger can be normalized. "
-            "Use intent reminder_update only when Seb asks to adjust, move, reschedule, change, or update an existing reminder and gives both a unique title/query and concrete due time/date. "
             "If Seb gives a date/day without a time, default to 09:00 local; never return 00:00 unless he says midnight, 12am, or start of day. "
             "For vague locations, ask a clarification. For named places like Home or Office, use location_name. "
             "Use proximity=enter unless wording says leaving/when I leave. "
             "Use intent note only when the message asks to save/write/note something. "
             "Use intent journal only when the message explicitly asks to journal/log an entry. "
-            "Schema: {\"intent\":\"reminder|reminder_update|note|journal|board|now|chat\","
+            "Schema: {\"intent\":\"reminder|note|journal|board|now|chat\","
             "\"confidence\":0.0,"
             "\"needs_clarification\":false,"
             "\"clarification\":\"\","
             "\"title\":\"\","
-            "\"query\":\"existing reminder title/query for reminder_update or empty\","
             "\"body\":\"\","
             "\"target\":\"\","
             "\"due_datetime\":\"YYYY-MM-DD HH:MM or empty\","
@@ -1404,18 +1333,6 @@ class PhotonAdapter(BasePlatformAdapter):
             payload["radius"] = radius
         if proximity in {"enter", "leave"}:
             payload["proximity"] = proximity
-        return payload
-
-    @staticmethod
-    def _intent_reminder_update_payload(intent: Dict[str, Any], original_text: str = "") -> Optional[Dict[str, str]]:
-        query = str(intent.get("query") or intent.get("title") or "").strip()
-        due = PhotonAdapter._intent_due_datetime(intent, original_text)
-        title = str(intent.get("new_title") or intent.get("updated_title") or "").strip()
-        if not query or not due:
-            return None
-        payload = {"query": query, "due": due}
-        if title:
-            payload["title"] = title
         return payload
 
     @staticmethod
@@ -1504,33 +1421,6 @@ class PhotonAdapter(BasePlatformAdapter):
                 "side_effects": [{"kind": "reminder", "writer": writer}],
                 "error_layer": None if writer.get("status") == "ok" else "reminders",
             }
-        elif kind == "reminder_update":
-            reminder_payload = self._intent_reminder_update_payload(intent, text)
-            if not reminder_payload:
-                return None
-            writer = await self._update_reminder(reminder_payload)
-            logger.info("[photon] intent gate reminder update result: %s", writer)
-            if writer.get("status") == "ok":
-                reply_bits = [f"Reminder updated: {writer.get('title', reminder_payload['query'])}"]
-                if writer.get("due"):
-                    reply_bits.append(str(writer.get("due")))
-                reply_text = " (" + ", ".join(reply_bits[1:]) + ")." if len(reply_bits) > 1 else "."
-                reply = reply_bits[0] + reply_text
-            elif writer.get("status") == "ambiguous":
-                reply = "Which reminder? I found multiple matches."
-            elif writer.get("status") == "not_found":
-                reply = f"Reminder not found: {reminder_payload['query']}."
-            else:
-                reply = f"Reminder update failed: {writer.get('error') or writer.get('status')}."
-            result = {
-                "status": "ok" if writer.get("status") == "ok" else "error",
-                "intent": "reminder",
-                "mutated": writer.get("status") == "ok",
-                "reply": reply,
-                "details": {"writer": writer},
-                "side_effects": [{"kind": "reminder_update", "writer": writer}],
-                "error_layer": None if writer.get("status") == "ok" else "reminders",
-            }
         else:
             if not routed_text:
                 return None
@@ -1587,6 +1477,11 @@ class PhotonAdapter(BasePlatformAdapter):
             "delete reminder ",
         )
         if lowered.startswith(prefixes):
+            return True
+        if re.search(
+            r"\b(?:adjust|change|move|reschedule|update)\s+(?:the\s+)?\S.+?\s+reminder\s+(?:to|for|on|until)\b",
+            lowered,
+        ):
             return True
         if re.search(
             r"\b(?:what(?:'s|s|\s+is)?\s+next|what\s+next|next\s+on\s+(?:the\s+)?agenda|agenda\b|what\s+should\s+i\s+(?:do|work\s+on)|where\s+(?:am|was)\s+i|calendar|location)\b",

@@ -28,7 +28,6 @@ def test_sebos_fallback_allowlist_is_exact() -> None:
             "sebos-render-mission-control",
             "sebos-journal-pending-prompt",
             "sebos-add-reminder",
-            "sebos-update-reminder",
             "sebos-ingest-journal",
         }
     )

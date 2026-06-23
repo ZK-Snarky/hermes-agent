@@ -96,21 +96,14 @@ def test_sebos_preauth_normalizes_photon_sender_and_space_ids(monkeypatch: pytes
     assert not adapter._is_photon_user_allowed_for_sebos(sender_id="+155****0000")
 
 
-def test_deterministic_reminder_update_parses_adjust_existing_reminder(monkeypatch: pytest.MonkeyPatch) -> None:
-    intent = PhotonAdapter._deterministic_natural_reminder_intent(
-        "hey can you adjust llc reminder to next wednesday",
-        timestamp=datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc),
+def test_reminder_update_phrase_is_routed_to_sebos_router() -> None:
+    assert PhotonAdapter._looks_like_sebos_command(
+        "hey can you adjust llc reminder to next wednesday"
     )
-
-    assert intent is not None
-    assert intent["intent"] == "reminder_update"
-    assert intent["query"] == "llc"
-    assert intent["due_datetime"] == "2026-06-24 09:00"
-    assert intent["title"] == ""
 
 
 @pytest.mark.asyncio
-async def test_natural_reminder_update_routes_to_sebos_update(
+async def test_reminder_update_phrase_dispatches_to_sebos_router(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _make_adapter(monkeypatch)
@@ -118,14 +111,13 @@ async def test_natural_reminder_update_routes_to_sebos_update(
     routed: List[str] = []
     quiet: List[Tuple[str, str, str | None]] = []
 
-    async def fake_run(*args: str, stdin: str | None = None, timeout: float = 20.0):
-        if args and args[0] == "sebos-journal-pending-prompt":
-            return {"date": None}
-        routed.append(" ".join(args))
+    async def fake_route(text: str):
+        routed.append(text)
         return {
             "status": "ok",
-            "title": "File LLC paperwork",
-            "due": "2026-06-24 09:00",
+            "intent": "reminder_update",
+            "reply": "Reminder updated: File LLC paperwork (2026-06-24 09:00).",
+            "mutated": True,
         }
 
     async def fake_ack(chat_id: str, message_id: str | None, emoji: str) -> bool:
@@ -134,14 +126,14 @@ async def test_natural_reminder_update_routes_to_sebos_update(
     async def fake_quiet(chat_id: str, text: str, *, reply_to: str | None = None) -> None:
         quiet.append((chat_id, text, reply_to))
 
-    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    monkeypatch.setattr(adapter, "_route_explicit_sebos_command", fake_route)
     monkeypatch.setattr(adapter, "_send_ack_reaction", fake_ack)
     monkeypatch.setattr(adapter, "_send_quiet", fake_quiet)
 
     await adapter._dispatch_inbound(_text_event("hey can you adjust llc reminder to next wednesday"))
 
     assert captured == []
-    assert routed == ["sebos-update-reminder llc --due 2026-06-24 09:00"]
+    assert routed == ["hey can you adjust llc reminder to next wednesday"]
     assert quiet == [("+155****4567", "Reminder updated: File LLC paperwork (2026-06-24 09:00).", "user-msg-1")]
 
 
