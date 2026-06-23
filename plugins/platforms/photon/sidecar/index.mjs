@@ -225,6 +225,41 @@ const knownMessages = new Map();
 // is the outbound reaction Message returned by `target.react()`, kept so
 // /unreact can `unsend()` it later.
 const reactionHandles = new Map();
+const inboundHealth = {
+  lastEventAt: null,
+  lastErrorAt: null,
+  lastError: null,
+  lastEndAt: null,
+};
+
+function summarizeError(e) {
+  const raw = e && (e.message || e.details || e.code)
+    ? `${e.message || ""}${e.details ? ` ${e.details}` : ""}${e.code ? ` ${e.code}` : ""}`.trim()
+    : String(e || "unknown error");
+  return raw.slice(0, 240);
+}
+
+function inboundHealthPayload() {
+  const now = Date.now();
+  const lastErrorMs = inboundHealth.lastErrorAt
+    ? now - Date.parse(inboundHealth.lastErrorAt)
+    : null;
+  // A recent stream error means inbound iMessages may be invisible even when
+  // the local loopback HTTP server is up. Surface that in health so the nightly
+  // reset/watchdog rail can catch the exact failure Seb hit: Spectrum stream
+  // auth/connect errors with a superficially "running" sidecar.
+  const recentError = lastErrorMs !== null && lastErrorMs < 5 * 60 * 1000;
+  return {
+    ok: !recentError,
+    inbound: {
+      ok: !recentError,
+      lastEventAt: inboundHealth.lastEventAt,
+      lastErrorAt: inboundHealth.lastErrorAt,
+      lastError: inboundHealth.lastError,
+      lastEndAt: inboundHealth.lastEndAt,
+    },
+  };
+}
 
 function normalizeReactionForIMessage(input) {
   const value = String(input || "").trim();
@@ -491,6 +526,9 @@ async function normalizeEvent(space, message) {
     try {
       for await (const [space, message] of app.messages) {
         backoff = 1000; // healthy traffic — reset
+        inboundHealth.lastEventAt = new Date().toISOString();
+        inboundHealth.lastErrorAt = null;
+        inboundHealth.lastError = null;
         // Only forward inbound messages (ignore our own outbound echoes).
         if (message && message.direction && message.direction !== "inbound") {
           continue;
@@ -501,8 +539,11 @@ async function normalizeEvent(space, message) {
         if (!event) continue;
         await deliver(JSON.stringify(event));
       }
+      inboundHealth.lastEndAt = new Date().toISOString();
       console.error("photon-sidecar: inbound stream ended — re-subscribing");
     } catch (e) {
+      inboundHealth.lastErrorAt = new Date().toISOString();
+      inboundHealth.lastError = summarizeError(e);
       console.error(
         "photon-sidecar: inbound stream errored — restarting: " +
           (e && e.message ? e.message : String(e))
@@ -675,7 +716,8 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     if (req.url === "/healthz") {
-      return ok(res, {});
+      const health = inboundHealthPayload();
+      return ok(res, health);
     }
     if (req.url === "/shutdown") {
       ok(res, {});
