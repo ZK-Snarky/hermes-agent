@@ -645,7 +645,14 @@ async def test_low_confidence_intent_falls_through_to_hermes(
     async def fake_classify(text: str, *, timestamp) -> Dict[str, Any]:
         return {"intent": "reminder", "confidence": 0.42, "needs_clarification": False}
 
+    # The deterministic sebOS router cannot pin a vague "remind me ..." to a
+    # concrete time, so it returns a clarify; the adapter must then let
+    # Athena/Hermes handle it rather than answering with the one-liner.
+    async def fake_route(text):
+        return {"intent": "clarify", "status": "needs_clarification", "reply": "When should I remind you?"}
+
     monkeypatch.setattr(adapter, "_classify_natural_intent", fake_classify)
+    monkeypatch.setattr(adapter, "_route_explicit_sebos_command", fake_route)
 
     await adapter._dispatch_inbound(_text_event("remind me about the thing maybe"))
 

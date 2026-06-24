@@ -614,6 +614,10 @@ class PhotonAdapter(BasePlatformAdapter):
         *,
         reply_to: Optional[str] = None,
     ) -> None:
+        # sebOS rule / shortcut replies bypass the gateway's final-response
+        # sanitizer, so scrub them here too: redact secrets and suppress any
+        # internal-notice/runtime chatter before it lands in the clean inbox.
+        text = _outbound_sanitize(text)
         result = await self._send_with_retry(
             chat_id,
             text,
@@ -1048,12 +1052,20 @@ class PhotonAdapter(BasePlatformAdapter):
             )
             return "handled"
 
-        if stripped and self._looks_like_sebos_command(stripped):
+        is_explicit = self._looks_like_sebos_command(stripped)
+        is_natural_reminder = bool(stripped) and not is_explicit and self._is_natural_reminder_add(stripped)
+        if stripped and (is_explicit or is_natural_reminder):
             result = await self._route_explicit_sebos_command(stripped)
             logger.info("[photon] sebOS route result: %s", result)
             intent = str(result.get("intent") or "")
             status = str(result.get("status") or "")
             if intent in {"unknown", "ignored", "ask"}:
+                return None
+            # A natural "remind me ..." the router could not pin to a concrete
+            # time comes back as a clarify. Rather than force the deterministic
+            # one-liner, let Athena/Hermes handle the vague reminder
+            # conversationally — the router only owns confident adds here.
+            if is_natural_reminder and intent == "clarify":
                 return None
             reply = str(result.get("reply") or "").strip()
             ack_emoji = self._sebos_ack_emoji(result)
@@ -1446,6 +1458,25 @@ class PhotonAdapter(BasePlatformAdapter):
             reply = "Handled." if status != "error" else "Could not handle that."
         await self._send_quiet(space_id, reply[:_MAX_MESSAGE_LENGTH], reply_to=message_id)
         return "handled"
+
+    @staticmethod
+    def _is_natural_reminder_add(text: str) -> bool:
+        """Deterministic ``remind me ...`` add, routed to the single sebOS
+        command_router (no LLM).
+
+        With the Photon LLM intent gate disabled, natural reminder *adds* would
+        otherwise fall through to Athena, which has no reminder tool. The sebOS
+        command_router parses the proven ``remind me <task> <time>`` shapes and
+        asks one short clarification when no time is present — it never guesses
+        a date. Reminder date *reasoning* therefore lives in sebOS, not here.
+        """
+        lowered = (text or "").strip().lower()
+        while True:
+            cleaned = re.sub(r"^(?:hey|hi|yo|ok|okay|athena)[,\s]+", "", lowered, count=1).strip()
+            if cleaned == lowered:
+                break
+            lowered = cleaned
+        return lowered.startswith("remind me")
 
     @staticmethod
     def _looks_like_sebos_command(text: str) -> bool:

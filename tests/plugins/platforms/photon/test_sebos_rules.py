@@ -330,13 +330,99 @@ async def test_sebos_rules_explicit_command_falls_back_to_old_runner(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_sebos_rules_natural_reminder_goes_to_hermes_for_date_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sebos_rules_blocked_reminder_update_sends_clean_copy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audit regression: the live-failing 'adjust llc reminder ...' phrase,
+    when Reminders access is blocked, must reach iMessage as clean copy and
+    never leak 'Terminal fallback timed out' or any raw command/stderr text."""
     adapter = _make_adapter(monkeypatch)
 
-    async def fake_run(*args, stdin=None, timeout=20.0):
-        raise AssertionError("natural reminders need model/date reasoning before sebOS writes")
+    class FakeBoundary:
+        async def route_text_command(self, text, *, write=True, db_path=None, channel="imessage", timeout=45.0):
+            # Shape now produced by the fixed sebOS command_router for a
+            # permission-blocked update: clean reply, raw details kept for logs.
+            return {
+                "intent": "reminder_update",
+                "status": "error",
+                "error_layer": "reminders",
+                "reply": "I can't reach Reminders right now — access is blocked on the Mac, so nothing was changed.",
+                "details": {
+                    "writer": {
+                        "status": "permission_denied",
+                        "list_outcome": {"returncode": 124, "stderr": "Terminal fallback timed out"},
+                    }
+                },
+            }
 
-    monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
+    sent = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: FakeBoundary())
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+
+    result = await adapter._handle_sebos_rules(
+        space_id="space-1",
+        message_id="msg-1",
+        text="hey can you adjust llc reminder to next wednesday",
+        mtype=MessageType.TEXT,
+        media_urls=[],
+        media_types=[],
+    )
+
+    assert result == "handled"
+    assert len(sent) == 1
+    body = sent[0][1].lower()
+    assert "access is blocked" in body
+    for leak in ("terminal fallback", "remindctl", "access denied", "returncode", "traceback", "stderr"):
+        assert leak not in body
+
+
+@pytest.mark.asyncio
+async def test_send_quiet_sanitizes_internal_notice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_send_quiet must run the outbound sanitizer so sebOS rule replies get
+    the same secret-redaction / internal-notice scrub as gateway replies."""
+    adapter = _make_adapter(monkeypatch)
+    captured = []
+
+    class _Ok:
+        success = True
+        error = None
+
+    async def fake_retry(chat_id, text, *, reply_to=None, max_retries=3, base_delay=2.0):
+        captured.append(text)
+        return _Ok()
+
+    monkeypatch.setattr(adapter, "_send_with_retry", fake_retry)
+    await adapter._send_quiet("space-1", "internal tool_call chatter leaked")
+    assert captured == ["Received."]
+
+
+@pytest.mark.asyncio
+async def test_sebos_rules_natural_reminder_add_routes_to_sebos_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the LLM intent gate disabled, a deterministic 'remind me ...' add
+    routes through the single sebOS command_router (which owns date reasoning
+    and one-shot clarification), not the dead Athena path."""
+    adapter = _make_adapter(monkeypatch)
+    routed = []
+
+    class FakeBoundary:
+        async def route_text_command(self, text, *, write=True, db_path=None, channel="imessage", timeout=45.0):
+            routed.append(text)
+            return {"intent": "reminder", "status": "ok", "mutated": True, "reply": "Reminder added: file llc paperwork (monday at 9am)."}
+
+    sent = []
+
+    async def fake_send(space_id: str, text: str, *, reply_to: str | None = None) -> None:
+        sent.append((space_id, text, reply_to))
+
+    # No ack reaction for this adapter, so the reply is sent as text.
+    async def no_ack(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: FakeBoundary())
+    monkeypatch.setattr(adapter, "_send_quiet", fake_send)
+    monkeypatch.setattr(adapter, "_send_ack_reaction", no_ack)
 
     result = await adapter._handle_sebos_rules(
         space_id="space-1",
@@ -347,7 +433,9 @@ async def test_sebos_rules_natural_reminder_goes_to_hermes_for_date_reasoning(mo
         media_types=[],
     )
 
-    assert result is None
+    assert result == "handled"
+    assert routed == ["remind me monday to file llc paperwork"]
+    assert sent and "reminder added" in sent[0][1].lower()
 
 
 @pytest.mark.asyncio

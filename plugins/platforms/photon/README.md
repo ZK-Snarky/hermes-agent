@@ -127,6 +127,53 @@ All env vars are documented in `plugin.yaml`. The most important:
 | `PHOTON_MARKDOWN`         | true                       | Send agent replies as markdown (iMessage renders natively). `false` strips formatting to plain text |
 | `PHOTON_REACTIONS`        | false                      | Tapback 👀/👍/👎 as processing status; tapbacks on bot messages reach the agent as `reaction:added:<emoji>` |
 
+## sebOS routing & the iMessage operating model
+
+iMessage is meant to feel like texting Athena. The default for any message is
+**straight to the gateway → AIAgent/Athena** with quiet display
+(`display.platforms.photon`: streaming off, tool_progress off, thinking off).
+Only a small, deterministic set of sebOS shortcuts is intercepted before the
+agent, via `_handle_sebos_rules` → the **single** sebOS `command_router`
+(`~/.hermes/sebos/lib/command_router.py`) through the `hermes-sebos`
+`photon_boundary` facade:
+
+- `j:` / `journal:`, `board`, `now`, `next`
+- reminder **read** (`what reminders do I have`)
+- reminder **update** (`adjust|change|move|reschedule <query> reminder to <when>`)
+- reminder **add** (`remind me <task> <when>`) — the router parses the proven
+  shapes and asks **one** clarification when no time is present; a vague
+  reminder it can't pin to a time falls through to Athena.
+- audio-journal capture when a preauthorized voice note arrives.
+
+Everything else is normal Athena chat. All reminder date reasoning and all
+user-facing reminder copy live in sebOS, **not** in this adapter.
+
+**The LLM intent gate is disabled** (`extra.intent_gate: false`, 2026-06-23).
+It was a second, pre-gateway classifier that duplicated `command_router`, added
+an LLM call plus its own reminder date-math and reply copy in the adapter, and
+routed natural reminders through a path that failed under the gateway's TCC
+context. The gate code is retained but dormant; prefer deleting it over
+re-enabling. Do not re-introduce domain logic (date parsing, reminder copy,
+routing brains) into this adapter — per the Hermes adapter contract it is a
+transport shim only.
+
+### Reminders never leak internals
+
+A reminder write that fails (most often because Reminders **TCC access is not
+granted to the gateway's launchd process**) must fail *cleanly*: the writer
+(`lib/reminder_writer.py`) no longer opens a GUI Terminal fallback under the
+gateway (it is opt-in via `--terminal-fallback`, interactive only), and
+`command_router` maps the typed status to plain copy
+("…access is blocked on the Mac, so nothing was changed."). The strings
+`Terminal fallback timed out`, `remindctl`, raw stderr, and `remindctl
+authorize` setup text must never reach the inbox. `_send_quiet` also runs the
+outbound sanitizer as a backstop.
+
+**To make reminder *writes* actually succeed from iMessage**, the gateway
+process needs Reminders access in macOS TCC (it is a manual, GUI step — see the
+audit report). Until then, reads work (cached via sebOS) and writes fail with
+the clean copy above.
+
 ## Attachments & limitations
 
 - **Inbound attachments and voice notes are downloaded.** The sidecar reads
