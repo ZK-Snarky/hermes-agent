@@ -554,59 +554,36 @@ async function normalizeEvent(space, message) {
       inboundHealth.lastSubscribeAt = subscribedAt;
       inboundHealth.lastRecoveryAt = subscribedAt;
       inboundHealth.lastEndAt = null;
-      // Liveness watchdog: spectrum-ts 6.x still uses gRPC for CatchUpEvents,
-      // and a shared-cloud catch-up failure can HANG the async iterator without
-      // throwing — the SDK logs internally but never yields or ends, stranding
-      // inbound forever (the /inbound heartbeat is on its own timer, so the
-      // Python side can't see it). A per-step timeout converts that silent stall
-      // into a throw, so the existing re-subscribe path below recovers it.
-      // Real traffic keeps resetting the window; only true silence cycles.
-      const STALE_MS = Number(process.env.PHOTON_INBOUND_STALE_MS) || 7 * 60 * 1000;
-      const it = app.messages[Symbol.asyncIterator]();
-      try {
-        for (;;) {
-          let staleTimer;
-          const stale = new Promise((_, reject) => {
-            staleTimer = setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    `inbound idle ${STALE_MS}ms — re-subscribing (recovers a stalled catch-up)`
-                  )
-                ),
-              STALE_MS
-            );
-          });
-          let step;
-          try {
-            step = await Promise.race([it.next(), stale]);
-          } finally {
-            clearTimeout(staleTimer);
-          }
-          if (step.done) break;
-          const [space, message] = step.value;
-          backoff = 1000; // healthy traffic — reset
-          inboundHealth.state = "receiving";
-          inboundHealth.lastEventAt = new Date().toISOString();
-          inboundHealth.lastRecoveryAt = inboundHealth.lastEventAt;
-          inboundHealth.lastErrorAt = null;
-          inboundHealth.lastError = null;
-          // Only forward inbound messages (ignore our own outbound echoes).
-          if (message && message.direction && message.direction !== "inbound") {
-            continue;
-          }
-          rememberInboundSpace(space, message);
-          rememberKnownMessage(message);
-          const event = await normalizeEvent(space, message);
-          if (!event) continue;
-          await deliver(JSON.stringify(event));
+      // CANONICAL spectrum-ts consumption: a single, long-lived `for await`
+      // over `app.messages`. Per the SDK source (resumableOrderedStream), this
+      // stream "reconnects forever with capped, jittered exponential backoff —
+      // the stream never ends with an error. The only terminal events are
+      // close() and consumer disconnect." Heartbeats + token refresh are
+      // internal to the SDK; there is nothing for us to keep alive.
+      //
+      // DO NOT wrap this in a manual iterator, an idle timeout, or call
+      // it.return(): `app.messages` is consume-once, so it.return() (a consumer
+      // disconnect) permanently kills the single stream the app gets, after
+      // which every re-iterate yields `done` immediately — the ~30s end-loop
+      // that stranded inbound on 2026-06-24. Recovery, if ever needed, is a
+      // full app restart, never re-iteration. The outer for(;;) remains only as
+      // a last-resort guard; in normal operation this loop never exits.
+      for await (const [space, message] of app.messages) {
+        backoff = 1000; // healthy traffic — reset
+        inboundHealth.state = "receiving";
+        inboundHealth.lastEventAt = new Date().toISOString();
+        inboundHealth.lastRecoveryAt = inboundHealth.lastEventAt;
+        inboundHealth.lastErrorAt = null;
+        inboundHealth.lastError = null;
+        // Only forward inbound messages (ignore our own outbound echoes).
+        if (message && message.direction && message.direction !== "inbound") {
+          continue;
         }
-      } finally {
-        try {
-          await it.return?.();
-        } catch {
-          /* ignore */
-        }
+        rememberInboundSpace(space, message);
+        rememberKnownMessage(message);
+        const event = await normalizeEvent(space, message);
+        if (!event) continue;
+        await deliver(JSON.stringify(event));
       }
       inboundHealth.state = "ended";
       inboundHealth.lastEndAt = new Date().toISOString();
