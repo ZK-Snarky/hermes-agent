@@ -1,6 +1,7 @@
 """Natural-language intent gate tests for PhotonAdapter."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -419,11 +420,13 @@ async def test_audio_journal_ingest_routes_through_boundary_facade(
     )
 
     assert handled is True
+    # Ingest now runs in the background; drain it before asserting.
+    await asyncio.gather(*list(adapter._journal_ingest_tasks))
     assert len(ingests) == 1
     payload_path, source, sender, timeout, payload, date = ingests[0]
     assert source == "photon"
     assert sender == "+15555550100"
-    assert timeout == 360.0
+    assert timeout == 1800.0
     assert date == "2026-06-20"
     assert payload_path.endswith(".json")
     attachment = payload["messages"][0]["attachments"][0]
@@ -456,11 +459,15 @@ async def test_audio_journal_ingest_falls_back_to_old_runner(
     async def fake_quiet(chat_id: str, text: str, *, reply_to: str | None = None) -> None:
         sent.append((chat_id, text))
 
+    async def fake_ack(chat_id: str, message_id: str | None, emoji: str) -> bool:
+        return True
+
     monkeypatch.setattr(adapter, "_active_journal_prompt_date", fake_prompt_date)
     monkeypatch.setattr(adapter, "_copy_audio_to_sebos_inbox", fake_copy)
     monkeypatch.setattr(adapter_module, "_load_sebos_photon_boundary", lambda: None)
     monkeypatch.setattr(adapter, "_run_sebos_json", fake_run)
     monkeypatch.setattr(adapter, "_send_quiet", fake_quiet)
+    monkeypatch.setattr(adapter, "_send_ack_reaction", fake_ack)
 
     handled = await adapter._try_ingest_audio_journal_reply(
         space_id="space-1",
@@ -473,13 +480,16 @@ async def test_audio_journal_ingest_falls_back_to_old_runner(
     )
 
     assert handled is True
+    # Ingest now runs in the background; drain it before asserting.
+    await asyncio.gather(*list(adapter._journal_ingest_tasks))
     assert len(calls) == 1
     args, stdin, timeout = calls[0]
     assert args[0] == "sebos-ingest-journal"
     assert args[2:] == ("--source", "photon", "--sender", "+15555550100", "--date", "2026-06-20")
     assert stdin is None
-    assert timeout == 360.0
-    assert sent == [("space-1", "Audio received, but transcription failed.")]
+    assert timeout == 1800.0
+    # inserted>0 but transcription failed → quiet correction, not a chat fallthrough.
+    assert sent == [("space-1", "Saved your audio, but the transcription failed.")]
 
 
 @pytest.mark.asyncio
@@ -524,6 +534,8 @@ async def test_audio_journal_ingests_without_active_prompt_instead_of_chat_fallt
     )
 
     assert handled is True
+    # Ingest now runs in the background; drain it before asserting.
+    await asyncio.gather(*list(adapter._journal_ingest_tasks))
     args, _, _ = calls[0]
     assert "--date" not in args
     assert acks == [("space-1", "msg-1", "❤️")]

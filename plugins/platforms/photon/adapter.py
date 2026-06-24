@@ -378,6 +378,9 @@ class PhotonAdapter(BasePlatformAdapter):
         # Hermes session instead of polluting the main command lane.
         self._sent_thread_roots: Dict[str, str] = {}
         self._last_thread_root_by_chat: Dict[str, str] = {}
+        # Background audio-journal ingests (transcription can take minutes); keep
+        # strong refs so the event loop doesn't garbage-collect them mid-run.
+        self._journal_ingest_tasks: set = set()
 
         # Group-chat mention gating (iMessage parity). When enabled,
         # group messages are ignored unless they match a wake word; DMs are
@@ -801,7 +804,7 @@ class PhotonAdapter(BasePlatformAdapter):
                 kwargs: Dict[str, Any] = {
                     "source": "photon",
                     "sender": sender_id,
-                    "timeout": 360.0,
+                    "timeout": 1800.0,
                 }
                 if entry_date:
                     kwargs["date"] = entry_date
@@ -824,7 +827,7 @@ class PhotonAdapter(BasePlatformAdapter):
         ]
         if entry_date:
             args.extend(["--date", entry_date])
-        return await self._run_sebos_json(*args, timeout=360.0)
+        return await self._run_sebos_json(*args, timeout=1800.0)
 
     @staticmethod
     def _reminder_payload_args(payload: Dict[str, str]) -> List[str]:
@@ -972,30 +975,72 @@ class PhotonAdapter(BasePlatformAdapter):
         }
         _SEBOS_AUDIO_INBOX.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix="photon-audio-journal-", suffix=".json", dir=str(_SEBOS_AUDIO_INBOX))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh)
-            result = await self._ingest_journal_payload(
-                tmp_name,
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+
+        # Transcription can take minutes. Never block the inbound path on it and
+        # never let a slow/failed transcription fall through to the chat agent
+        # ("send it as text"). Ack immediately, then finish the ingest in the
+        # background — audio from a preauthorized sender is always a journal and
+        # this lane owns it end to end.
+        if not await self._send_ack_reaction(space_id, message_id, "❤️"):
+            await self._send_quiet(space_id, "Got it — saving your journal.", reply_to=message_id)
+        task = asyncio.create_task(
+            self._finish_audio_journal_ingest(
+                space_id=space_id,
+                message_id=message_id,
+                payload_path=tmp_name,
                 sender_id=sender_id,
                 entry_date=prompt_date,
             )
+        )
+        self._journal_ingest_tasks.add(task)
+        task.add_done_callback(self._journal_ingest_tasks.discard)
+        return True
+
+    async def _finish_audio_journal_ingest(
+        self,
+        *,
+        space_id: str,
+        message_id: Optional[str],
+        payload_path: str,
+        sender_id: str,
+        entry_date: Optional[str],
+    ) -> None:
+        """Transcribe + ingest a cached audio journal off the inbound path.
+
+        Runs after the sender has already been acked. Any failure stays in the
+        journal lane (a quiet retry nudge) and never reaches the chat agent.
+        """
+        try:
+            result = await self._ingest_journal_payload(
+                payload_path,
+                sender_id=sender_id,
+                entry_date=entry_date,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[photon] audio journal background ingest failed: %s", exc)
+            result = {"status": "error", "error": str(exc)}
         finally:
             try:
-                os.unlink(tmp_name)
+                os.unlink(payload_path)
             except OSError:
                 pass
         logger.info("[photon] sebOS audio journal ingest result: %s", result)
-        if int(result.get("inserted") or 0) <= 0:
-            return False
-        if int(result.get("transcribed_ok") or 0) > 0:
-            # Keep chat clean: no full transcript echo. Seb wants the audio saved,
-            # then a quiet native-feeling acknowledgement.
-            if not await self._send_ack_reaction(space_id, message_id, "❤️"):
-                await self._send_quiet(space_id, "Audio journal saved.")
-        else:
-            await self._send_quiet(space_id, "Audio received, but transcription failed.")
-        return True
+        if int(result.get("inserted") or 0) > 0:
+            if int(result.get("transcribed_ok") or 0) <= 0:
+                await self._send_quiet(
+                    space_id,
+                    "Saved your audio, but the transcription failed.",
+                    reply_to=message_id,
+                )
+            # else: success — already acked with ❤️, keep the chat clean.
+            return
+        await self._send_quiet(
+            space_id,
+            "I couldn't save that voice journal — mind sending it again?",
+            reply_to=message_id,
+        )
 
     async def _handle_sebos_rules(
         self,
