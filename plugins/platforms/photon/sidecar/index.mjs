@@ -554,22 +554,59 @@ async function normalizeEvent(space, message) {
       inboundHealth.lastSubscribeAt = subscribedAt;
       inboundHealth.lastRecoveryAt = subscribedAt;
       inboundHealth.lastEndAt = null;
-      for await (const [space, message] of app.messages) {
-        backoff = 1000; // healthy traffic — reset
-        inboundHealth.state = "receiving";
-        inboundHealth.lastEventAt = new Date().toISOString();
-        inboundHealth.lastRecoveryAt = inboundHealth.lastEventAt;
-        inboundHealth.lastErrorAt = null;
-        inboundHealth.lastError = null;
-        // Only forward inbound messages (ignore our own outbound echoes).
-        if (message && message.direction && message.direction !== "inbound") {
-          continue;
+      // Liveness watchdog: spectrum-ts 6.x still uses gRPC for CatchUpEvents,
+      // and a shared-cloud catch-up failure can HANG the async iterator without
+      // throwing — the SDK logs internally but never yields or ends, stranding
+      // inbound forever (the /inbound heartbeat is on its own timer, so the
+      // Python side can't see it). A per-step timeout converts that silent stall
+      // into a throw, so the existing re-subscribe path below recovers it.
+      // Real traffic keeps resetting the window; only true silence cycles.
+      const STALE_MS = Number(process.env.PHOTON_INBOUND_STALE_MS) || 7 * 60 * 1000;
+      const it = app.messages[Symbol.asyncIterator]();
+      try {
+        for (;;) {
+          let staleTimer;
+          const stale = new Promise((_, reject) => {
+            staleTimer = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `inbound idle ${STALE_MS}ms — re-subscribing (recovers a stalled catch-up)`
+                  )
+                ),
+              STALE_MS
+            );
+          });
+          let step;
+          try {
+            step = await Promise.race([it.next(), stale]);
+          } finally {
+            clearTimeout(staleTimer);
+          }
+          if (step.done) break;
+          const [space, message] = step.value;
+          backoff = 1000; // healthy traffic — reset
+          inboundHealth.state = "receiving";
+          inboundHealth.lastEventAt = new Date().toISOString();
+          inboundHealth.lastRecoveryAt = inboundHealth.lastEventAt;
+          inboundHealth.lastErrorAt = null;
+          inboundHealth.lastError = null;
+          // Only forward inbound messages (ignore our own outbound echoes).
+          if (message && message.direction && message.direction !== "inbound") {
+            continue;
+          }
+          rememberInboundSpace(space, message);
+          rememberKnownMessage(message);
+          const event = await normalizeEvent(space, message);
+          if (!event) continue;
+          await deliver(JSON.stringify(event));
         }
-        rememberInboundSpace(space, message);
-        rememberKnownMessage(message);
-        const event = await normalizeEvent(space, message);
-        if (!event) continue;
-        await deliver(JSON.stringify(event));
+      } finally {
+        try {
+          await it.return?.();
+        } catch {
+          /* ignore */
+        }
       }
       inboundHealth.state = "ended";
       inboundHealth.lastEndAt = new Date().toISOString();
