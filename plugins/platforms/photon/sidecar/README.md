@@ -11,9 +11,16 @@ The sidecar:
   to push send requests (auth via `X-Hermes-Sidecar-Token`); `/typing`
   remains a compatibility no-op because Photon typing maps to unreliable
   upstream `setTyping`
-- drains the inbound message stream so `spectrum-ts` keeps its
-  reconnect/heartbeat machinery alive (real inbound delivery is via
-  Photon's signed webhook hitting our Python aiohttp server)
+- consumes the inbound message stream with a SINGLE long-lived
+  `for await (const [space, message] of app.messages)` and forwards each
+  message to the Python adapter over `/inbound` — this IS the live inbound
+  delivery path (verified 2026-06-24). `app.messages` is a consume-once
+  stream the SDK keeps alive itself (internal reconnect, heartbeats, token
+  refresh); do NOT wrap it in a re-subscribe loop or call `it.return()`
+  mid-run — that is a consumer-disconnect and permanently kills the stream,
+  causing a ~30s done-loop with zero delivery (the 2026-06-24 inbound
+  outage). Recovery, if ever needed, is a full process restart, never
+  re-iteration.
 
 ## Install
 
