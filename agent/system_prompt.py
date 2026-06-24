@@ -438,6 +438,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if _athena_tasks_block:
         context_parts.append(_athena_tasks_block)
 
+    # Athena Reminders block (upcoming Apple Reminders from sebOS reminder_cache,
+    # read-only). Built once at agent init like goals/board/tasks.
+    _athena_reminders_block = getattr(agent, "_athena_reminders_block", "")
+    if _athena_reminders_block:
+        context_parts.append(_athena_reminders_block)
+
     # ── Volatile tier (changes per session/turn — never cached) ───
     volatile_parts: List[str] = []
 

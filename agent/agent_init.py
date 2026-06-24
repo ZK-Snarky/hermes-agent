@@ -1339,6 +1339,26 @@ def init_agent(
     except Exception as _tk_err:
         _ra().logger.debug("Athena tasks injection skipped: %s", _tk_err)
 
+    # Athena Reminders injection (config.yaml → athena.reminders_injection).
+    # Read-only: upcoming Apple Reminders (recent-overdue + next 14d) from the
+    # sebOS reminder_cache latest snapshot, so Athena sees what's due alongside
+    # tasks. Default on; disable with athena.reminders_injection: false.
+    agent._athena_reminders_block = ""
+    try:
+        _athena_rcfg = _agent_cfg.get("athena", {})
+        if not isinstance(_athena_rcfg, dict):
+            _athena_rcfg = {}
+        if _athena_rcfg.get("reminders_injection", True):
+            _rem_db = _athena_rcfg.get("reminders_db") or "sebos/sebos.db"
+            if os.path.isabs(_rem_db):
+                _rem_path = _rem_db
+            else:
+                _rem_path = get_hermes_home() / _rem_db
+            from agent.prompt_builder import build_athena_reminders_prompt
+            agent._athena_reminders_block = build_athena_reminders_prompt(_rem_path)
+    except Exception as _rm_err:
+        _ra().logger.debug("Athena reminders injection skipped: %s", _rm_err)
+
     # App-level API retry count (wraps each model API call).  Default 3,
     # overridable via agent.api_max_retries in config.yaml.  See #11616.
     try:

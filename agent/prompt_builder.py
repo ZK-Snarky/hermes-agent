@@ -1645,6 +1645,72 @@ def load_soul_md(context_length: Optional[int] = None) -> Optional[str]:
         return None
 
 
+def build_athena_reminders_prompt(db_path, max_chars: int = 1200, horizon_days: int = 14, overdue_days: int = 7) -> str:
+    """Render upcoming Apple Reminders (recent-overdue + due within horizon) from
+    the sebOS reminder_cache LATEST snapshot, so Athena sees what's due alongside
+    tasks. Read-only. The cache is snapshotted (many rows per reminder) and holds
+    stale entries, so we take the newest snapshot and a [-overdue_days, +horizon]
+    window. Returns ``""`` on any error so it can never break prompt assembly.
+    """
+    try:
+        import sqlite3
+        from datetime import datetime, timezone, timedelta
+
+        path = Path(db_path)
+        if not path.exists():
+            return ""
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        snap = con.execute("SELECT MAX(snapshot_ts) FROM reminder_cache").fetchone()[0]
+        if not snap:
+            con.close()
+            return ""
+        rows = con.execute(
+            "SELECT title, due_date, list_name FROM reminder_cache "
+            "WHERE snapshot_ts=? AND completed=0 AND due_date IS NOT NULL AND due_date!=''",
+            (snap,),
+        ).fetchall()
+        con.close()
+    except Exception as e:
+        logger.debug("Could not read reminders from %s: %s", db_path, e)
+        return ""
+
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    lo, hi = now - timedelta(days=overdue_days), now + timedelta(days=horizon_days)
+    items, seen = [], set()
+    for r in rows:
+        title = " ".join(str(r["title"] or "").split())
+        if not title:
+            continue
+        try:
+            due = datetime.fromisoformat(str(r["due_date"]).replace("Z", "+00:00"))
+            if due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        if not (lo <= due <= hi):
+            continue
+        key = (title.lower(), due.date().isoformat())
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append((due, title))
+    if not items:
+        return ""
+    items.sort(key=lambda x: x[0])
+    lines = [f"# Upcoming Reminders (recent-overdue + next {horizon_days}d, from Apple Reminders)"]
+    for due, title in items[:10]:
+        when = due.astimezone().strftime("%a %b %d %I:%M%p").replace(" 0", " ")
+        flag = " (OVERDUE)" if due < now else ""
+        lines.append(f"- {title} — {when}{flag}")
+    block = "\n".join(lines).strip()
+    if len(block) > max_chars:
+        block = block[: max_chars - 1].rstrip() + "…"
+    return block
+
+
 def build_athena_tasks_prompt(tasks_path, max_chars: int = 1600) -> str:
     """Render Athena's near-term task checklist from athena_tasks.json.
 
