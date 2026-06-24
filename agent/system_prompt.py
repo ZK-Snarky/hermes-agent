@@ -432,6 +432,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if _athena_board_block:
         context_parts.append(_athena_board_block)
 
+    # Athena Tasks block (near-term execution checklist, athena_tasks.json).
+    # Rendered once at agent init like goals/board; ladders up to the goals.
+    _athena_tasks_block = getattr(agent, "_athena_tasks_block", "")
+    if _athena_tasks_block:
+        context_parts.append(_athena_tasks_block)
+
     # ── Volatile tier (changes per session/turn — never cached) ───
     volatile_parts: List[str] = []
 

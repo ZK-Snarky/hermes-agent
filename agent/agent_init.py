@@ -1317,6 +1317,28 @@ def init_agent(
     except Exception as _bd_err:
         _ra().logger.debug("Athena board injection skipped: %s", _bd_err)
 
+    # Athena Tasks injection (config.yaml → athena.tasks_injection). Near-term
+    # execution checklist (athena_tasks.json) that ladders up to the goals.
+    # Same self-healing read-at-init pattern; default on; disable with
+    # athena.tasks_injection: false.
+    agent._athena_tasks_block = ""
+    try:
+        _athena_tcfg = _agent_cfg.get("athena", {})
+        if not isinstance(_athena_tcfg, dict):
+            _athena_tcfg = {}
+        if _athena_tcfg.get("tasks_injection", True):
+            _tasks_file = (
+                _athena_tcfg.get("tasks_file") or "sebos/state/athena_tasks.json"
+            )
+            if os.path.isabs(_tasks_file):
+                _tasks_path = _tasks_file
+            else:
+                _tasks_path = get_hermes_home() / _tasks_file
+            from agent.prompt_builder import build_athena_tasks_prompt
+            agent._athena_tasks_block = build_athena_tasks_prompt(_tasks_path)
+    except Exception as _tk_err:
+        _ra().logger.debug("Athena tasks injection skipped: %s", _tk_err)
+
     # App-level API retry count (wraps each model API call).  Default 3,
     # overridable via agent.api_max_retries in config.yaml.  See #11616.
     try:

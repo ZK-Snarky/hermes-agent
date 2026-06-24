@@ -1645,6 +1645,72 @@ def load_soul_md(context_length: Optional[int] = None) -> Optional[str]:
         return None
 
 
+def build_athena_tasks_prompt(tasks_path, max_chars: int = 1600) -> str:
+    """Render Athena's near-term task checklist from athena_tasks.json.
+
+    These TASKS ladder up to the north-star goals (see the goals block). Shows
+    OPEN tasks grouped by area, each tagged with owner — owner=agent means
+    Athena's own work advances it; owner=seb means progress comes from Seb's
+    journals/responses. Plus a recently-done tally. Returns ``""`` on any
+    missing/invalid input so it can never break prompt assembly.
+    """
+    try:
+        path = Path(tasks_path)
+        if not path.exists():
+            return ""
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug("Could not read athena tasks from %s: %s", tasks_path, e)
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return ""
+
+    def _clip(text, n):
+        text = " ".join(str(text or "").split())
+        return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+    open_by_area: dict = {}
+    done: list = []
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        label = _clip(t.get("task"), 120)
+        if not label:
+            continue
+        if str(t.get("status") or "").lower() == "done":
+            done.append(label)
+            continue
+        area = str(t.get("area") or "Other").strip() or "Other"
+        owner = str(t.get("owner") or "").strip()
+        prog = _clip(t.get("progress"), 80)
+        entry = label + (f" ({prog})" if prog else "") + (f" [{owner}]" if owner else "")
+        open_by_area.setdefault(area, []).append(entry)
+    if not open_by_area and not done:
+        return ""
+
+    lines = ["# Athena Current Tasks (next few weeks — ladder up to the goals above)"]
+    lines.append("owner: agent = Athena's own work advances it; seb = tracked from Seb's journals/responses.")
+    ordered = ["Close", "GHL", "Falconnect", "EZ", "Athena"]
+    for area in ordered + [a for a in open_by_area if a not in ordered]:
+        items = open_by_area.get(area)
+        if not items:
+            continue
+        lines.append("")
+        lines.append(f"{area}:")
+        lines.extend(f"- [ ] {it}" for it in items)
+    if done:
+        lines.append("")
+        lines.append("Recently done: " + "; ".join(done[:6]))
+
+    block = "\n".join(lines).strip()
+    if len(block) > max_chars:
+        block = block[: max_chars - 1].rstrip() + "…"
+    return block
+
+
 def build_athena_board_prompt(board_query_bin, max_chars: int = 1400) -> str:
     """Render a compact Athena Live Board block from sebos-board-query.
 
