@@ -1294,6 +1294,29 @@ def init_agent(
     except Exception as _ag_err:
         _ra().logger.debug("Athena goals injection skipped: %s", _ag_err)
 
+    # Athena Live Board injection (config.yaml → athena.board_injection).
+    # Mirrors the goals block: shells the read-only sebos-board-query once at
+    # init so the live prompt carries Seb's current NOW/ACTIVE/WAITING/LATER/
+    # SIGNALS instead of only rendering them to Apple Notes. Self-healing
+    # (re-read each init); default on; disable with athena.board_injection: false.
+    agent._athena_board_block = ""
+    try:
+        _athena_bcfg = _agent_cfg.get("athena", {})
+        if not isinstance(_athena_bcfg, dict):
+            _athena_bcfg = {}
+        if _athena_bcfg.get("board_injection", True):
+            _board_bin = (
+                _athena_bcfg.get("board_query_bin") or "sebos/bin/sebos-board-query"
+            )
+            if os.path.isabs(_board_bin):
+                _board_path = _board_bin
+            else:
+                _board_path = get_hermes_home() / _board_bin
+            from agent.prompt_builder import build_athena_board_prompt
+            agent._athena_board_block = build_athena_board_prompt(_board_path)
+    except Exception as _bd_err:
+        _ra().logger.debug("Athena board injection skipped: %s", _bd_err)
+
     # App-level API retry count (wraps each model API call).  Default 3,
     # overridable via agent.api_max_retries in config.yaml.  See #11616.
     try:

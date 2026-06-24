@@ -6,6 +6,7 @@ assemble pieces, then combines them with memory and ephemeral prompts.
 
 import json
 import logging
+import subprocess
 import os
 import threading
 import contextvars
@@ -1642,6 +1643,71 @@ def load_soul_md(context_length: Optional[int] = None) -> Optional[str]:
     except Exception as e:
         logger.debug("Could not read SOUL.md from %s: %s", soul_path, e)
         return None
+
+
+def build_athena_board_prompt(board_query_bin, max_chars: int = 1400) -> str:
+    """Render a compact Athena Live Board block from sebos-board-query.
+
+    sebOS owns the Live Board (``hermes_events`` -> scored sections ->
+    ``board_snapshots``). This shells the READ-ONLY ``sebos-board-query --json
+    snapshot`` once at agent init and renders the current NOW/ACTIVE/WAITING/
+    LATER/SIGNALS into a tight block, so Athena reasons over Seb's current
+    operating state instead of only rendering it to Apple Notes. Returns ``""``
+    on any missing/invalid/timed-out input so it can never break prompt
+    assembly. The CLI is read-only and resolves its own DB regardless of cwd.
+    """
+    try:
+        bin_path = Path(board_query_bin)
+        if not bin_path.exists():
+            return ""
+        proc = subprocess.run(
+            [str(bin_path), "--json", "snapshot"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode != 0 or not (proc.stdout or "").strip():
+            return ""
+        data = json.loads(proc.stdout)
+    except Exception as e:
+        logger.debug("Could not read athena board from %s: %s", board_query_bin, e)
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    sections = data.get("sections")
+    if not isinstance(sections, dict):
+        return ""
+
+    def _clip(text, n):
+        text = " ".join(str(text or "").split())
+        return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+    body_lines = []
+    for sec in ("NOW", "ACTIVE", "WAITING", "LATER", "SIGNALS"):
+        items = sections.get(sec)
+        if not isinstance(items, list) or not items:
+            continue
+        cleaned = [_clip(i, 140) for i in items[:5] if str(i or "").strip()]
+        if not cleaned:
+            continue
+        body_lines.append("")
+        body_lines.append(f"{sec}:")
+        body_lines.extend(f"- {c}" for c in cleaned)
+    if not body_lines:
+        return ""
+
+    lines = ["# Athena Live Board (current operating state)"]
+    rendered_at = data.get("rendered_at")
+    src = "sebOS Live Board (hermes_events)"
+    if rendered_at:
+        src += f", as of {rendered_at}"
+    lines.append(f"Source: {src}. Live board state wins over stale assumptions.")
+    lines.extend(body_lines)
+
+    block = "\n".join(lines).strip()
+    if len(block) > max_chars:
+        block = block[: max_chars - 1].rstrip() + "…"
+    return block
 
 
 def build_athena_goals_prompt(goals_path, max_chars: int = 2800) -> str:

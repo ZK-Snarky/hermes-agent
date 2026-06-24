@@ -425,6 +425,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if _athena_goals_block:
         context_parts.append(_athena_goals_block)
 
+    # Athena Live Board block (sebOS hermes_events → scored sections, via the
+    # read-only sebos-board-query). Rendered once at agent init like goals so
+    # Athena can reason over the current board, not just render it to Notes.
+    _athena_board_block = getattr(agent, "_athena_board_block", "")
+    if _athena_board_block:
+        context_parts.append(_athena_board_block)
+
     # ── Volatile tier (changes per session/turn — never cached) ───
     volatile_parts: List[str] = []
 
