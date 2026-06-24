@@ -233,18 +233,16 @@ function inboundHealthPayload() {
 }
 
 function normalizeReactionForIMessage(input) {
+  // spectrum-ts 6.x reaction()/react() take the emoji itself, and the iMessage
+  // provider maps it to the right tapback (e.g. "❤️" -> love). 3.1.0 wanted the
+  // tapback *name*, but passing those names ("love", ...) now silently no-ops.
+  // So pass real emojis straight through and only expand the bare text
+  // shortcuts to their emoji.
   const value = String(input || "").trim();
   const map = {
-    "❤️": "love",
-    "❤": "love",
-    "👍": "like",
-    "👎": "dislike",
-    "😂": "laugh",
-    "🤣": "laugh",
-    "‼️": "emphasize",
-    "!!": "emphasize",
-    "❓": "question",
-    "?": "question",
+    "❤": "❤️",
+    "!!": "‼️",
+    "?": "❓",
   };
   return map[value] || value;
 }
