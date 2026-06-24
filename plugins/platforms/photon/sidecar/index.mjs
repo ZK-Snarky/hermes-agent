@@ -57,8 +57,6 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import { once } from "node:events";
-import { patchSpectrumTs } from "./patch-spectrum-mixed-attachments.mjs";
-import { patchSpectrumCatchUpRateLimit } from "./patch-spectrum-catchup-rate-limit.mjs";
 
 const projectId = process.env.PHOTON_PROJECT_ID;
 const projectSecret = process.env.PHOTON_PROJECT_SECRET;
@@ -135,44 +133,10 @@ if (!projectId || !projectSecret || !sharedToken) {
   process.exit(2);
 }
 
-// Lazy-load spectrum-ts so a missing install fails with a clear message
-// instead of a cryptic module-resolution error during import. Apply Hermes'
-// pinned-sdk compatibility patch first so existing installs self-heal at
-// runtime, not only during npm postinstall.
-try {
-  const patchResult = patchSpectrumTs();
-  if (patchResult.patched) {
-    console.error(
-      `photon-sidecar: spectrum mixed attachment patch applied: ${patchResult.file}`
-    );
-  }
-} catch (e) {
-  console.error(
-    "photon-sidecar: spectrum mixed attachment patch failed. " +
-      "Run `npm install` inside plugins/platforms/photon/sidecar/ or " +
-      "upgrade the Photon sidecar patch for the pinned spectrum-ts version. " +
-      "Original error: " +
-      (e && e.stack ? e.stack : String(e))
-  );
-  process.exit(3);
-}
-try {
-  const rateLimitPatchResult = patchSpectrumCatchUpRateLimit();
-  if (rateLimitPatchResult.patched) {
-    console.error(
-      `photon-sidecar: spectrum catch-up rate-limit patch applied: ${rateLimitPatchResult.file}`
-    );
-  }
-} catch (e) {
-  console.error(
-    "photon-sidecar: spectrum catch-up rate-limit patch failed. " +
-      "Run `npm install` inside plugins/platforms/photon/sidecar/ or " +
-      "upgrade the Photon sidecar patch for the pinned spectrum-ts version. " +
-      "Original error: " +
-      (e && e.stack ? e.stack : String(e))
-  );
-  process.exit(3);
-}
+// spectrum-ts 6.x moved the inbound stream from gRPC to a WebSocket transport
+// (heartbeats + reconnect backoff + token refresh) and rewrote the iMessage
+// inbound mapper, so the old 3.1.0 mixed-attachment and catch-up-rate-limit
+// patches are obsolete and have been removed.
 let Spectrum,
   imessage,
   attachment,

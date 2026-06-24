@@ -1711,7 +1711,7 @@ class PhotonAdapter(BasePlatformAdapter):
 
         self._mark_connected()
         logger.info(
-            "[photon] connected — sidecar on %s:%d, streaming inbound over gRPC",
+            "[photon] connected — sidecar on %s:%d, streaming inbound over WebSocket",
             self._sidecar_bind, self._sidecar_port,
         )
         return True
@@ -2237,28 +2237,8 @@ class PhotonAdapter(BasePlatformAdapter):
         # never runs — can't leave it orphaned on the port.
         env["PHOTON_SIDECAR_WATCH_STDIN"] = "1"
 
-        try:
-            patch = subprocess.run(  # noqa: S603
-                [
-                    self._node_bin,
-                    str(_SIDECAR_DIR / "patch-spectrum-mixed-attachments.mjs"),
-                    str(_SIDECAR_DIR),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            if patch.returncode != 0:
-                raise RuntimeError((patch.stderr or patch.stdout or "").strip())
-            if patch.stderr.strip():
-                logger.debug("[photon] %s", patch.stderr.strip())
-        except Exception as exc:
-            logger.warning(
-                "[photon] failed to apply Spectrum mixed attachment patch: %s",
-                exc,
-            )
-
+        # spectrum-ts 6.x rewrote the iMessage inbound mapper, so the old 3.1.0
+        # mixed-attachment dist patch is gone — there is nothing to apply here.
         self._sidecar_proc = subprocess.Popen(  # noqa: S603
             [self._node_bin, str(_SIDECAR_DIR / "index.mjs")],
             stdin=subprocess.PIPE,
