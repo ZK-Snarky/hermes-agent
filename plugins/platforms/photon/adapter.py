@@ -1036,6 +1036,12 @@ class PhotonAdapter(BasePlatformAdapter):
                 )
             # else: success — already acked with ❤️, keep the chat clean.
             return
+        # inserted == 0 with status ok / skipped means this transcript already
+        # exists (e.g. the marker-only recovery re-grabbed a cached clip and it
+        # deduped). That is NOT a failure — the ❤️ ack stands; do not nag the
+        # user to resend (that just loops on the same attachment-delivery race).
+        if str(result.get("status") or "") == "ok" or int(result.get("skipped") or 0) > 0:
+            return
         await self._send_quiet(
             space_id,
             "I couldn't save that voice journal — mind sending it again?",
