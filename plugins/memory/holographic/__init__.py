@@ -191,13 +191,28 @@ class HolographicMemoryProvider(MemoryProvider):
         if is_truthy_value(self._config.get("auto_extract", False)) and self._store and messages:
             self._auto_extract_facts(messages)
 
-    def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Mirror built-in memory writes as facts."""
-        if action == "add" and self._store and content:
-            try:
+    def on_memory_write(self, action: str, target: str, content: str, metadata: Dict[str, Any] | None = None) -> None:
+        """Mirror built-in memory writes as facts: add copies the entry; replace and remove carry the
+        change to the fact an earlier add mirrored (matched by its exact previous text), so a corrected
+        or deleted profile entry does not live on in the store."""
+        if not self._store:
+            return
+        try:
+            if action == "add" and content:
                 self._store.add_fact(content, category="user_pref" if target == "user" else "general")
-            except Exception as e:
-                logger.debug("Holographic memory_write mirror failed: %s", e)
+                return
+            previous = str((metadata or {}).get("previous_content") or "").strip()
+            if action not in ("replace", "remove") or not previous:
+                return
+            row = self._store._one("SELECT fact_id FROM facts WHERE content = ?", (previous,))
+            if row is None:
+                return
+            if action == "remove" or not content.strip():
+                self._store.remove_fact(int(row["fact_id"]))
+            else:
+                self._store.update_fact(int(row["fact_id"]), content=content)
+        except Exception as e:
+            logger.debug("Holographic memory_write mirror failed: %s", e)
 
     def shutdown(self) -> None:
         # Close on the caller's thread: leaving the shared connection (+ write lock) to GC keeps it alive on a gateway.
