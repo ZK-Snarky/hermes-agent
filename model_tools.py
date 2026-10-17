@@ -223,8 +223,9 @@ def get_tool_definitions(enabled_toolsets: Optional[list[str]] = None, disabled_
     def compute():
         return _compute_tool_definitions(enabled_toolsets, disabled_toolsets, quiet_mode,
                                          skip_tool_search_assembly=skip_tool_search_assembly)
-    if not quiet_mode:
-        return compute()
+    # Memoized either way: the non-quiet path only adds print side effects, which a cache hit
+    # correctly skips. The key covers every input that changes the result, and callers get a
+    # copy, so a cached result is byte-identical to a fresh one and never shares its objects.
     cache_key = _tool_defs_cache_key(enabled_toolsets, disabled_toolsets, skip_tool_search_assembly)
     # Cache the freshly-computed list, but hand callers a shallow copy so downstream mutations (e.g.
     # run_agent appending memory/LCM tool schemas to self.tools) don't poison the cache. Without this, a
