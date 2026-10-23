@@ -319,7 +319,12 @@ async def check_native_route(runner, payload, session_id, available_source, adap
     entry = store.lookup_by_session_key(route)
     if entry is None or entry.session_id != session_id:
         raise RuntimeStoreError('admission_conflict')
-    if adapter is None or runner._adapter_for_source(event.source) is not adapter:
+    # A route two transports share (a key alias, checked above: both sources key to ``route``) is
+    # answered by the transport the queued input came from, not by the one that registered the live
+    # session first; requiring the live source's adapter refused every queued input from the other.
+    event_adapter = runner._adapter_for_source(event.source)
+    shared = event.source.platform != available_source.platform
+    if event_adapter is None or (not shared and event_adapter is not adapter):
         raise RuntimeStoreError('not_found')
     if event.source.platform.value == 'webhook':
         from gateway.platforms.webhook_delivery import route_digest, validate_destination
