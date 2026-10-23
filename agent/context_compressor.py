@@ -4060,6 +4060,11 @@ Be specific with file paths, commands, line numbers, and results.]
 ## Key Decisions
 [Important technical decisions and WHY they were made]
 
+## People & Commitments
+[Every person mentioned, by name (never "someone" or "a friend"), with who they are to the user.
+Every open commitment: who owes it, what, to whom, and by when (keep the exact due date and time).
+Every decision and who made it. Keep all of these from the previous summary until they are done.]
+
 ## Errors & Fixes
 [Errors hit during the compacted turns and how each was resolved — include the
 exact error text. Pay special attention to corrections the USER gave; quote
