@@ -227,9 +227,11 @@ _DARWIN_FD_RECORD_SIZE = 1200  # PROC_PIDFDVNODEPATHINFO_SIZE
 # these are pinned against live descriptors rather than derived from <libproc.h>.  ``vst_dev`` /
 # ``vst_ino`` are the same two fields the Linux leg compares; the path is the vnode's last
 # pathname, resolved by the kernel (``/private/var/...`` where the caller opened ``/var/...``).
+_DARWIN_FD_OPENFLAGS_OFFSET = 0  # proc_fileinfo.fi_openflags (kernel FREAD/FWRITE bits)
 _DARWIN_FD_DEV_OFFSET = 24
 _DARWIN_FD_INO_OFFSET = 32
 _DARWIN_FD_PATH_OFFSET = 176
+_DARWIN_FWRITE = 0x0002
 _DARWIN_LIBPROC = None
 
 # Wall-clock budget for one darwin holder-scan pass (#113187). A single
@@ -278,7 +280,8 @@ def _darwin_all_pids(lib) -> list[int]:
 
 
 def _iter_darwin_fd_targets():
-    """Yield ``(pid, fd, last pathname, (st_dev, st_ino))`` for every vnode fd libproc reports.
+    """Yield ``(pid, fd, last pathname, (st_dev, st_ino), writable)`` for every vnode fd libproc
+    reports; ``writable`` is whether the descriptor was opened for writing.
 
     The pathname and the identity both stay readable after the path is unlinked, which is what
     makes an orphaned WAL generation visible at all on macOS.  Processes that cannot be inspected
@@ -308,7 +311,8 @@ def _iter_darwin_fd_targets():
             identity = (struct.unpack_from("<I", raw, _DARWIN_FD_DEV_OFFSET)[0],
                         struct.unpack_from("<Q", raw, _DARWIN_FD_INO_OFFSET)[0])
             target = raw[_DARWIN_FD_PATH_OFFSET:].split(b"\x00", 1)[0].decode("utf-8", "replace")
-            yield pid, fd, target, identity
+            writable = bool(struct.unpack_from("<I", raw, _DARWIN_FD_OPENFLAGS_OFFSET)[0] & _DARWIN_FWRITE)
+            yield pid, fd, target, identity, writable
 
 
 def _iter_darwin_sidecar_holders(db_path) -> list[tuple[int, str]]:
@@ -327,9 +331,10 @@ def _iter_darwin_sidecar_holders(db_path) -> list[tuple[int, str]]:
 
     def _scan() -> None:
         try:
-            for pid, _fd, target, identity in _iter_darwin_fd_targets():
+            for pid, _fd, target, identity, writable in _iter_darwin_fd_targets():
                 literal = watched.get(target.casefold())
-                if literal is not None and _identity_is_truly_unlinked(identity, literal):
+                if (literal is not None and _counts_as_holder(pid, writable)
+                        and _identity_is_truly_unlinked(identity, literal)):
                     holders.append((pid, target))
         except BaseException as exc:
             errors.append(exc)
@@ -352,6 +357,30 @@ def _iter_darwin_sidecar_holders(db_path) -> list[tuple[int, str]]:
     return holders
 
 
+def _counts_as_holder(pid: int, writable: Optional[bool]) -> bool:
+    """Whether a descriptor on a retired sidecar can split the store.
+
+    The split needs a writer still appending to (or checkpointing) the orphan WAL. A read-only
+    descriptor in another process can do neither (a backup tool, an indexer, a VM's shared-folder
+    mount after a ``mode=ro`` read), so it must not refuse every open until that process exits.
+    This process's own descriptors always count: SQLite shares one inode/-shm state per process,
+    so an in-process opener would attach to the orphan whatever the descriptor's mode. An unknown
+    mode (``None``) counts, keeping the guard fail-closed."""
+    return pid == os.getpid() or writable is not False
+
+
+def _proc_fd_writable(fd_path: str) -> Optional[bool]:
+    """Whether a ``/proc/<pid>/fd/<n>`` descriptor was opened for writing (``None`` when unknown)."""
+    try:
+        with open(fd_path.replace("/fd/", "/fdinfo/", 1), encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("flags:"):
+                    return (int(line.split()[1], 8) & os.O_ACCMODE) != os.O_RDONLY
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
 def iter_deleted_sqlite_sidecar_holders(db_path) -> list[tuple[int, str]]:
     """Return processes holding an unlinked ``state.db-wal`` / ``-shm`` sidecar for *db_path*.
 
@@ -362,8 +391,10 @@ def iter_deleted_sqlite_sidecar_holders(db_path) -> list[tuple[int, str]]:
     that path holds.  Windows returns ``[]`` -- it cannot unlink a held sidecar, so no retired
     generation can exist; any other platform returns ``[]`` as before.
 
-    Includes this process: on the open/write refuse path the in-process writer holding the orphan
-    inode must not mint a replacement WAL (``_foreign_state_db_holders`` skips this PID)."""
+    Another process counts only while its descriptor can write the retired generation
+    (:func:`_counts_as_holder`). Includes this process whatever the mode: on the open/write
+    refuse path the in-process writer holding the orphan inode must not mint a replacement WAL
+    (``_foreign_state_db_holders`` skips this PID)."""
     if sys.platform == "win32":
         return []
     holders: list[tuple[int, str]] = []
@@ -375,6 +406,7 @@ def iter_deleted_sqlite_sidecar_holders(db_path) -> list[tuple[int, str]]:
             for pid, target, fd_path in _iter_proc_fd_targets():
                 canonical = canonical_sqlite_path(target)
                 if (" (deleted)" in target and canonical in watched
+                        and _counts_as_holder(pid, _proc_fd_writable(fd_path))
                         and _fd_is_truly_unlinked(fd_path, watched[canonical])):
                     holders.append((pid, target))
     except Exception as exc:
@@ -835,7 +867,8 @@ def count_db_holders(db_path: Path) -> Optional[int]:
             # (case, symlinked prefix), which is exactly what the sidecar leg had to case-fold around.
             st = os.stat(target)
             identity = (st.st_dev, st.st_ino)
-            return len({pid for pid, _fd, _path, ident in _iter_darwin_fd_targets() if ident == identity})
+            return len({pid for pid, _fd, _path, ident, _writable in _iter_darwin_fd_targets()
+                        if ident == identity})
         if not sys.platform.startswith("linux"):
             return None
         return len({pid for pid, link, _fd_path in _iter_proc_fd_targets() if link == target})

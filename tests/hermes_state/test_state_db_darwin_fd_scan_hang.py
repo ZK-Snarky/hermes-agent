@@ -64,6 +64,8 @@ class _HealthyLibproc:
 
     def proc_pidfdinfo(self, pid, fd, flavor, record, size):
         blob = bytearray(_DARWIN_FD_RECORD_SIZE)
+        # Opened for writing: only a writer in another process holds the retired generation.
+        struct.pack_into("<I", blob, dbfile._DARWIN_FD_OPENFLAGS_OFFSET, dbfile._DARWIN_FWRITE)
         struct.pack_into("<I", blob, _DARWIN_FD_DEV_OFFSET, self._identity[0])
         struct.pack_into("<Q", blob, _DARWIN_FD_INO_OFFSET, self._identity[1])
         encoded = self._target.encode("utf-8")

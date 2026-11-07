@@ -563,3 +563,35 @@ def test_iter_darwin_judges_by_identity_not_by_pathname(tmp_path):
         assert any(target == os.path.realpath(str(sidecar)) for _pid, target in holders)
     finally:
         held.close()
+
+
+@pytest.mark.platforms("linux", "macos")
+@pytest.mark.parametrize("mode,counts", [(os.O_RDONLY, False), (os.O_RDWR, True)])
+def test_foreign_holder_counts_only_when_it_can_write(tmp_path, mode, counts):
+    """A read-only view of the retired WAL in ANOTHER process (a backup tool, a VM's shared-folder
+    mount) can neither append frames nor checkpoint, so it must not refuse every open until that
+    process exits; a foreign writer on the same orphan still must."""
+    import subprocess
+
+    path = tmp_path / "state.db"
+    wal = Path(str(path) + "-wal")
+    wal.write_bytes(b"retired generation")
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         f"import os, sys; fd = os.open({str(wal)!r}, {mode}); print('open', flush=True); sys.stdin.read()"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert child.stdout.readline().strip() == "open"
+        wal.unlink()
+        wal.write_bytes(b"replacement generation")
+        holders = iter_deleted_sqlite_sidecar_holders(path)
+        assert any(pid == child.pid for pid, _target in holders) is counts
+        if counts:
+            with pytest.raises(DeletedWalGenerationError):
+                refuse_deleted_wal_generation(path)
+        else:
+            refuse_deleted_wal_generation(path)
+    finally:
+        child.kill()
+        child.wait()
