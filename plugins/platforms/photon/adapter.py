@@ -1328,6 +1328,26 @@ class PhotonAdapter(BasePlatformAdapter):
 
     # send_animation: base falls back to send_image (iMessage renders GIFs inline as images).
 
+    async def send_multiple_images(self, chat_id: str, images: list[tuple[str, str]],
+                                   metadata: Optional[dict[str, Any]] = None,
+                                   human_delay: float = 0.0) -> SendResult:
+        """Two or more local images go out as one iMessage (spectrum-ts ``group()``), which the
+        phone shows as one swipeable group instead of a bubble each. A batch with a URL, a GIF
+        or a caption, and a group the sidecar refuses (an older sidecar answers 400), use the
+        base one-by-one send."""
+        from urllib.request import url2pathname
+        paths = [self.validate_media_delivery_path(url2pathname(url[7:]))
+                 for url, alt in images
+                 if url.startswith("file://") and not alt and not self._is_animation_url(url)]
+        if len(images) < 2 or len(paths) != len(images) or not all(paths):
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
+        result = await self._post_send("/send-attachment", {"spaceId": chat_id, "paths": paths},
+                                       structured=True, sent_text=f"[{len(paths)} images]")
+        if result.success:
+            return result
+        logger.warning("[photon] image group refused (%s); sending one by one", result.error)
+        return await super().send_multiple_images(chat_id, images, metadata, human_delay)
+
     async def _sidecar_try(self, path: str, body: dict[str, Any], what: str) -> bool:
         """Soft-failing sidecar call: True on success, False (debug-logged) on any error."""
         try:

@@ -206,7 +206,8 @@ Common issues:
   notes, video, and documents through spectrum-ts' `attachment()` /
   `voice()` content builders via the sidecar's `/send-attachment`
   endpoint. Captions arrive as a separate iMessage bubble after the
-  media.
+  media. Two or more local images in one reply arrive as one swipeable
+  image group instead of a bubble each.
 - **Native polls are supported.** Hermes sends poll content through
   spectrum-ts' `poll()` builder via the sidecar's `/send-poll` endpoint.
 - **Read receipts are supported.** The sidecar marks an inbound iMessage

@@ -150,6 +150,8 @@ All env vars are documented in `plugin.yaml`. The most important:
   documents are sent via `space.send(attachment(...))` /
   `space.send(voice(...))` through the sidecar's `/send-attachment`
   endpoint; a caption is delivered as a separate text bubble after the media.
+  Two or more local images in one reply go out as one message via
+  `space.send(group(...))`, which iMessage shows as one swipeable group.
 - **Markdown is rendered.** Replies go out via spectrum-ts' `markdown()`
   builder; iMessage renders bold/italics/lists/code natively and other
   Spectrum platforms degrade to readable plain text. URL-only replies go out

@@ -128,3 +128,65 @@ async def test_standalone_send_text_then_attachments(
     assert posted[1][1]["path"] == str(img)
     assert posted[1][1]["kind"] == "attachment"
     assert posted[1][1]["mimeType"] == "image/png"
+
+
+def _images(tmp_path, *names: str) -> list[str]:
+    files = []
+    for name in names:
+        p = tmp_path / name
+        p.write_bytes(b"\x89PNG fake")
+        files.append(str(p))
+    return files
+
+
+@pytest.mark.asyncio
+async def test_several_local_images_go_out_as_one_group(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from urllib.parse import quote
+
+    _patch_safe_path(monkeypatch)
+    adapter = _make_adapter(monkeypatch)
+    calls = _capture_sidecar(adapter)
+    files = _images(tmp_path, "a.png", "b c.png", "d.jpg")
+
+    # The gateway hands local images over as quoted file:// URLs with no alt text.
+    result = await adapter.send_multiple_images("chat", [(f"file://{quote(f)}", "") for f in files])
+
+    assert result.success is True
+    assert calls == [("/send-attachment", {"spaceId": "chat", "paths": files})]
+
+
+@pytest.mark.asyncio
+async def test_refused_group_falls_back_to_one_by_one(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    _patch_safe_path(monkeypatch)
+    adapter = _make_adapter(monkeypatch)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(path: str, body: dict[str, Any]) -> dict[str, Any]:
+        calls.append((path, body))
+        if "paths" in body:  # an older sidecar without group support
+            raise photon_adapter.PhotonSidecarError(
+                path=path, status_code=400, error="spaceId and path are required")
+        return {"ok": True, "messageId": "msg-1"}
+
+    adapter._sidecar_call = _fake_call  # type: ignore[assignment]
+    files = _images(tmp_path, "a.png", "b.png")
+
+    result = await adapter.send_multiple_images("chat", [(f"file://{f}", "") for f in files])
+
+    assert result.success is True
+    assert [body.get("path") for _, body in calls[1:]] == files
+
+
+@pytest.mark.asyncio
+async def test_single_or_captioned_images_go_one_by_one(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    _patch_safe_path(monkeypatch)
+    adapter = _make_adapter(monkeypatch)
+    calls = _capture_sidecar(adapter)
+    first, second = _images(tmp_path, "a.png", "b.png")
+
+    await adapter.send_multiple_images("chat", [(f"file://{first}", "")])
+    await adapter.send_multiple_images("chat", [(f"file://{first}", ""), (f"file://{second}", "a caption")])
+
+    assert all("paths" not in body for _, body in calls)
+    assert [body["path"] for _, body in calls] == [first, first, second]
+    assert calls[2][1]["caption"] == "a caption"

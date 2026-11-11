@@ -27,6 +27,8 @@
 //       body: {"spaceId": "...", "path": "...", "name": "..." | null,
 //              "mimeType": "..." | null, "caption": "..." | null,
 //              "kind": "attachment" | "voice"}
+//       or {"spaceId": "...", "paths": ["...", "...", ...]}: two or more
+//       files as one message (iMessage shows them as one swipeable group).
 //   - POST /react       -> {"ok": true, "reactionId": "..." | null}
 //       body: {"spaceId": "...", "messageId": "<target msg id>",
 //              "emoji": "👀"}
@@ -307,6 +309,7 @@ let Spectrum,
   spectrumRichlink,
   spectrumTyping,
   spectrumPoll,
+  spectrumGroup,
   imessageEffect;
 try {
   ({
@@ -314,6 +317,7 @@ try {
     attachment,
     voice,
     poll: spectrumPoll,
+    group: spectrumGroup,
     text: spectrumText,
     markdown: spectrumMarkdown,
     richlink: spectrumRichlink,
@@ -1098,8 +1102,19 @@ const server = http.createServer(async (req, res) => {
       return ok(res, { messageId: result?.id || null });
     }
     if (req.url === "/send-attachment") {
-      const { spaceId, path, name, mimeType, caption, kind } =
+      const { spaceId, path, paths, name, mimeType, caption, kind } =
         body || {};
+      if (paths !== undefined) {
+        if (!spaceId || !Array.isArray(paths) || paths.length < 2 ||
+            !paths.every((p) => typeof p === "string" && p)) {
+          return badRequest(res, "spaceId and two or more paths are required");
+        }
+        const space = await resolveSpace(spaceId);
+        const result = await space.send(
+          spectrumGroup(...paths.map((p) => attachment(p)))
+        );
+        return ok(res, { messageId: result?.id || null });
+      }
       if (!spaceId || typeof path !== "string" || !path) {
         return badRequest(res, "spaceId and path are required");
       }
