@@ -58,3 +58,42 @@ def test_adapter_batch_key_matches_the_store_key(tmp_path, monkeypatch):
     adapter.set_session_store(store)
     keys = {adapter._event_session_key(MessageEvent(text="hi", source=_dm(tid))) for tid in ("501", "777")}
     assert keys == {store._generate_session_key(_dm("501"))} == {"agent:main:telegram:dm:111"}
+
+
+def test_background_delegation_result_returns_to_the_thread_it_was_asked_in(tmp_path, monkeypatch):
+    """The shared session was created in thread 501, so its stored origin names 501. A background
+    delegation asked for from thread 777 must report back to 777, as a reply would."""
+    from gateway.run import GatewayRunner
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from tests.waiting import wait_until
+    from tools import async_delegation as ad
+    from tools.process_registry import process_registry
+
+    extra = {"dm_threads": "shared"}
+    runner = GatewayRunner(GatewayConfig(
+        platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="t", extra=extra)}))
+    adapter = DummyTelegramAdapter()
+    adapter.config.extra.update(extra)
+    runner.adapters[Platform.TELEGRAM] = adapter
+    key = runner.session_store.get_or_create_session(_dm("501")).session_key
+
+    ad._reset_for_tests()
+    tokens = set_session_vars(platform="telegram", chat_id="111", chat_type="dm", thread_id="777",
+                              user_id="111", session_key=key)
+    try:
+        handle = ad.dispatch_async_delegation(
+            goal="research", context=None, toolsets=None, role="leaf", model="m", session_key=key,
+            runner=lambda: {"status": "completed", "summary": "done"})
+    finally:
+        clear_session_vars(tokens)
+
+    def completion():
+        while not process_registry.completion_queue.empty():
+            evt = process_registry.completion_queue.get_nowait()
+            if evt.get("delegation_id") == handle["delegation_id"]:
+                return evt
+        return None
+
+    evt = wait_until(completion, timeout=10, what="the delegation's completion event")
+    source = runner._build_process_event_source(evt)
+    assert (source.platform, source.chat_id, source.thread_id) == (Platform.TELEGRAM, "111", "777")

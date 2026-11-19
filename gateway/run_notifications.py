@@ -138,6 +138,36 @@ def _raw_process_event_session_id(evt: dict) -> str:
     return str(evt.get("origin_session_id") or session_key or "").strip()
 
 
+def _event_route_source(evt: dict, platform_name: str, chat_type: str, chat_id: str,
+                        profile: Optional[str]) -> Optional[SessionSource]:
+    """The ``SessionSource`` a synthetic event's route fields name, or None for a platform that is
+    neither built in nor registered."""
+    try:
+        platform: Optional[Platform] = Platform(platform_name)
+    except ValueError:
+        platform = None
+    if platform is not None and platform.value not in _BUILTIN_PLATFORM_VALUES:
+        # Reject dynamic pseudo-members: plugin platforms must be registered.
+        from gateway.platform_registry import platform_registry
+        try:
+            registered = platform_registry.is_registered(platform.value)
+        except Exception:  # a plugin's deferred import can raise anything: then it is not registered
+            logger.debug("Platform registry check failed for %r", platform_name, exc_info=True)
+            registered = False
+        platform = platform if registered else None
+    if platform is None:
+        logger.warning("Synthetic process event has invalid platform metadata: %r", platform_name)
+        return None
+
+    def _opt(field: str) -> Optional[str]:
+        return str(evt.get(field) or "").strip() or None
+
+    return SessionSource(
+        platform=platform, chat_id=chat_id, chat_type=chat_type, thread_id=_opt("thread_id"),
+        user_id=_opt("user_id"), user_name=_opt("user_name"), scope_id=_opt("scope_id"), profile=profile,
+    )
+
+
 def _watch_notification_metadata(evt: dict, source) -> dict[str, Any]:
     """Synthetic-event metadata for a watch/completion notification: routing pins, proof ids,
     automation identities, and the local async-result card."""
@@ -626,12 +656,16 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
     def _build_process_event_source(self, evt: dict):
         """Resolve the canonical source for a synthetic background-process event.
 
-        Prefer the persisted session-store origin; the active foreground event causes cross-topic bleed.
+        Prefer the chat the producer bound at dispatch, then the persisted session-store origin; the
+        active foreground event causes cross-topic bleed.
         """
         from gateway.run import _parse_session_key
         session_key = str(evt.get("session_key") or "").strip()
         derived = {}
         if session_key:
+            bound = self._bound_event_source(evt, session_key)
+            if bound is not None:
+                return bound
             try:
                 self.session_store._ensure_loaded()
                 entry = self.session_store._entries.get(session_key)
@@ -659,25 +693,8 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                 session_key, platform_name, chat_type, chat_id, evt.get("type", "?"),
             )
             return None
-        try:
-            platform = Platform(platform_name)
-            # Reject dynamic pseudo-members: plugin platforms must be registered.
-            if platform.value not in _BUILTIN_PLATFORM_VALUES:
-                try:
-                    from gateway.platform_registry import platform_registry
-                    if not platform_registry.is_registered(platform.value):
-                        raise ValueError(platform_name)
-                except Exception:
-                    raise ValueError(platform_name)
-        except Exception:
-            logger.warning("Synthetic process event has invalid platform metadata: %r", platform_name)
-            return None
-
-        def _opt(field: str) -> Optional[str]:
-            return str(evt.get(field) or "").strip() or None
-
-        scope_id = _opt("scope_id")
-        if scope_id is None and chat_type not in ("dm", "thread"):
+        source = _event_route_source(evt, platform_name, chat_type, chat_id, profile)
+        if source is not None and source.scope_id is None and chat_type not in ("dm", "thread"):
             # Reconstructed scoped-chat source without scope_id: a relay connector's tenant guard may
             # decline the reply. Warn, don't fail (native adapters need no scope_id).
             logger.warning(
@@ -685,10 +702,25 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                 "without scope_id; scoped relay egress may be declined by "
                 "the connector's tenant guard (user_id fallback only).", platform_name, chat_id, chat_type,
             )
-        return SessionSource(
-            platform=platform, chat_id=chat_id, chat_type=chat_type, thread_id=_opt("thread_id"),
-            user_id=_opt("user_id"), user_name=_opt("user_name"), scope_id=scope_id, profile=profile,
-        )
+        return source
+
+    def _bound_event_source(self, evt: dict, session_key: str):
+        """The chat a background delegation was asked from (``routing_origin_bound``: captured whole
+        at dispatch), while it still keys to *session_key*; else None. A session's stored origin is
+        the chat that created it, and one session can span chats (Telegram ``dm_threads: shared``
+        keys every DM thread as one), so the result goes back to the chat that asked, as a reply
+        does. A chat that no longer keys to this session (its config changed) falls back."""
+        if evt.get("routing_origin_bound") is not True:
+            return None
+        from gateway.run import _parse_session_key
+        fields = [str(evt.get(name) or "").strip() for name in ("platform", "chat_type", "chat_id")]
+        if not all(fields):
+            return None
+        source = _event_route_source(evt, fields[0].lower(), fields[1].lower(), fields[2],
+                                     (_parse_session_key(session_key) or {}).get("profile"))
+        if source is None or self._session_key_for_source(source) != session_key:
+            return None
+        return source
 
     async def _drain_watch_notifications(self, completion_queue) -> None:
         """Consume queued watch events and inject them when notifications are enabled.

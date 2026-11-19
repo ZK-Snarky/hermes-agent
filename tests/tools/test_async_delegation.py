@@ -544,6 +544,44 @@ assert ad.complete_completion_delivery({delegation_id!r}, 'acker')
     assert probe.stdout.strip().splitlines()[-1] == "0"
 
 
+def test_restart_replay_keeps_the_dispatching_chat_exact(tmp_path):
+    """A phone-number chat id is where the result goes, not child output: the durable copy is
+    redacted, so a restart-replayed completion must still name the chat it was asked from."""
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    env = {**os.environ, "HERMES_HOME": str(tmp_path), "PYTHONPATH": repo}
+    producer = r'''
+import time
+from gateway.session_context import clear_session_vars, set_session_vars
+from tools import async_delegation as ad
+tokens = set_session_vars(platform="signal", chat_id="+15551234567", chat_type="dm",
+                          user_id="+15551234567", session_key="agent:main:signal:dm:+15551234567")
+try:
+    ad.dispatch_async_delegation(
+        goal="research", context=None, toolsets=None, role="leaf", model="m",
+        session_key="agent:main:signal:dm:+15551234567", parent_session_id="p",
+        runner=lambda: {"status": "completed", "summary": "done"})
+finally:
+    clear_session_vars(tokens)
+deadline = time.time() + 5
+while ad.active_count() and time.time() < deadline:
+    time.sleep(.01)
+'''
+    subprocess.run([sys.executable, "-c", producer], cwd=repo, env=env,
+                   text=True, capture_output=True, timeout=30, check=True)
+    consumer = r'''
+import json
+from tools.process_registry import process_registry
+from tools.async_delegation import restore_undelivered_completions
+restore_undelivered_completions(process_registry.completion_queue)
+print(json.dumps(process_registry.completion_queue.get_nowait(), sort_keys=True))
+'''
+    second = subprocess.run([sys.executable, "-c", consumer], cwd=repo, env=env,
+                            text=True, capture_output=True, timeout=30, check=True)
+    evt = json.loads(second.stdout.strip().splitlines()[-1])
+    assert {k: evt.get(k) for k in ("platform", "chat_id", "chat_type", "routing_origin_bound")} == {
+        "platform": "signal", "chat_id": "+15551234567", "chat_type": "dm", "routing_origin_bound": True}
+
+
 # ---------------------------------------------------------------------------
 # Integration: delegate_task(background=True) routing
 # ---------------------------------------------------------------------------

@@ -26,12 +26,13 @@ def _session_route(unit: dict[str, Any]) -> dict[str, str]:
     from gateway.run import _parse_session_key
     task = unit.get("task") or {}
     key = str(unit.get("origin_session") or "")
-    parsed = _parse_session_key(key) or {}
+    # The chat the parent asked from, bound at its dispatch; the key names only the session it lives in.
+    chat = task if task.get("routing_origin_bound") else (_parse_session_key(key) or {})
     # An api_server parent is addressed by its raw session id (what ``_current_origin_session_id`` reads back).
-    chat_id = str(unit.get("origin_session_id") or "") or parsed.get("chat_id", "")
+    chat_id = str(unit.get("origin_session_id") or "") or str(chat.get("chat_id") or "")
     return {
-        "platform": "api_server" if unit.get("origin_session_id") else parsed.get("platform", ""), "chat_id": chat_id,
-        "chat_type": parsed.get("chat_type", ""), "thread_id": parsed.get("thread_id", ""),
+        "platform": "api_server" if unit.get("origin_session_id") else str(chat.get("platform") or ""),
+        "chat_id": chat_id, "chat_type": str(chat.get("chat_type") or ""), "thread_id": str(chat.get("thread_id") or ""),
         "user_id": str(task.get("user_id") or ""), "user_name": str(task.get("user_name") or ""),
         "scope_id": str(task.get("scope_id") or ""), "session_key": key,
         "session_id": str(unit.get("parent_session_id") or ""),

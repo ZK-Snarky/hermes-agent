@@ -104,9 +104,11 @@ _monitor_stop = threading.Event()
 
 _LIVE_STATES = {"running", "stalling", "finalizing"}
 _ACTIVE_STATES = ("running", "stalling")
-# Routing origin persisted at dispatch so a restart-recovered completion can
-# reconstruct a full SessionSource (scope_id drives relay tenant egress).
-_ROUTING_KEYS = ("scope_id", "user_id", "user_name")
+# Routing origin persisted at dispatch so a completion, live or restart-recovered, goes back to the
+# chat it was asked from (scope_id drives relay tenant egress). ``routing_origin_bound`` marks a
+# whole chat captured here: the gateway delivers to it over the session's stored origin.
+_CHAT_KEYS = ("platform", "chat_id", "chat_type", "thread_id")
+_ROUTING_KEYS = (*_CHAT_KEYS, "scope_id", "user_id", "user_name", "routing_origin_bound")
 # Structured stall metadata — additive, present only on stall finalizations.
 _STALL_META_KEYS = ("stalled_after_quiet_seconds", "stall_threshold_seconds", "stall_phase", "stall_grace_seconds")
 # Private stall bookkeeping on the record -> public field in list_async_delegations().
@@ -142,14 +144,17 @@ def _ledger_reader():
 
 
 def _capture_routing_origin() -> dict[str, Any]:
-    """Snapshot scope_id/user_id/user_name on the PARENT thread (the daemon worker
-    has no contextvars) so a restart-replayed completion can rebuild a SessionSource.
-    Best-effort: empty values are omitted."""
+    """Snapshot the dispatching chat on the PARENT thread (the daemon worker has no contextvars)
+    so the completion can rebuild its SessionSource. Best-effort: empty values are omitted, and the
+    chat fields only when platform, chat_id and chat_type are all known."""
     try:
         from gateway.session_context import get_session_env
-        return {k: v for k in _ROUTING_KEYS if (v := get_session_env(f"HERMES_SESSION_{k.upper()}", ""))}
+        route = {k: v for k in _ROUTING_KEYS[:-1] if (v := get_session_env(f"HERMES_SESSION_{k.upper()}", ""))}
     except Exception:
         return {}
+    if all(route.get(k) for k in _CHAT_KEYS[:3]):
+        return {**route, "routing_origin_bound": True}
+    return {k: v for k, v in route.items() if k not in _CHAT_KEYS}
 
 
 def _persist_dispatch(record: dict[str, Any]) -> None:
